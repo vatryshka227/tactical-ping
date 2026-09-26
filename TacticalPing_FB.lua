@@ -12,6 +12,127 @@ local bit = require 'bit'
 encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 
+-- ============ АВТООБНОВЛЕНИЕ ============
+local SCRIPT_VERSION = "1.0.0"
+local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
+local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
+local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
+
+local update_state = {
+    checking = false,
+    downloading = false,
+    status = "Нажмите кнопку для проверки",
+    remote_version = nil
+}
+
+local function parse_version(v)
+    if not v then return 0, 0, 0 end
+    local a, b, c = v:match("(%d+)%.(%d+)%.(%d+)")
+    return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
+end
+
+local function is_newer(remote, local_)
+    local r1, r2, r3 = parse_version(remote)
+    local l1, l2, l3 = parse_version(local_)
+    if r1 ~= l1 then return r1 > l1 end
+    if r2 ~= l2 then return r2 > l2 end
+    return r3 > l3
+end
+
+local function check_and_update(silent)
+    if update_state.checking or update_state.downloading then return end
+    update_state.checking = true
+    update_state.status = "Проверка обновлений..."
+
+    lua_thread.create(function()
+        -- 1. Качаем файл версии
+        local tmp_ver = getWorkingDirectory() .. "\\tp_ver.tmp"
+        if doesFileExist(tmp_ver) then os.remove(tmp_ver) end
+
+        downloadUrlToFile(UPDATE_URL_VERSION, tmp_ver)
+
+        local t = 0
+        while not doesFileExist(tmp_ver) and t < 8000 do
+            wait(100); t = t + 100
+        end
+
+        if not doesFileExist(tmp_ver) then
+            update_state.checking = false
+            update_state.status = "Ошибка: не удалось скачать versions.txt"
+            if not silent then
+                sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Не удалось проверить обновления (версия).", -1)
+            end
+            return
+        end
+
+        local f = io.open(tmp_ver, "r")
+        local remote_ver = f and f:read("*a") or ""
+        if f then f:close() end
+        os.remove(tmp_ver)
+        remote_ver = remote_ver:gsub("%s+", "")
+
+        update_state.remote_version = remote_ver
+        update_state.checking = false
+
+        if not is_newer(remote_ver, SCRIPT_VERSION) then
+            update_state.status = "Актуальная версия (" .. SCRIPT_VERSION .. ")"
+            if not silent then
+                sampAddChatMessage(string.format(
+                    "{00FF88}[Tactical Ping] {FFFFFF}У вас последняя версия: {FFFF00}%s", SCRIPT_VERSION), -1)
+            end
+            return
+        end
+
+        -- 2. Есть новая — качаем скрипт
+        update_state.downloading = true
+        update_state.status = "Скачивание " .. remote_ver .. "..."
+        sampAddChatMessage(string.format(
+            "{00FF88}[Tactical Ping] {FFFFFF}Найдена новая версия {FFFF00}%s{FFFFFF}. Скачиваю...", remote_ver), -1)
+
+        if doesFileExist(UPDATE_TMP) then os.remove(UPDATE_TMP) end
+        downloadUrlToFile(UPDATE_URL_SCRIPT, UPDATE_TMP)
+
+        t = 0
+        while not doesFileExist(UPDATE_TMP) and t < 20000 do
+            wait(100); t = t + 100
+        end
+
+        if not doesFileExist(UPDATE_TMP) then
+            update_state.downloading = false
+            update_state.status = "Ошибка скачивания скрипта"
+            sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Не удалось скачать обновление.", -1)
+            return
+        end
+
+        -- 3. Проверяем, что файл не пустой
+        local uf = io.open(UPDATE_TMP, "r")
+        local content = uf and uf:read("*a") or ""
+        if uf then uf:close() end
+        if #content < 500 then
+            os.remove(UPDATE_TMP)
+            update_state.downloading = false
+            update_state.status = "Ошибка: файл повреждён"
+            sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Скачанный файл повреждён или пуст.", -1)
+            return
+        end
+
+        -- 4. Перезаписываем текущий скрипт
+        local this_file = thisScript().path
+        local outf = io.open(this_file, "w")
+        if outf then
+            outf:write(content)
+            outf:close()
+        end
+        os.remove(UPDATE_TMP)
+
+        update_state.downloading = false
+        update_state.status = "Обновлено до " .. remote_ver .. ". Введите /mreload"
+        sampAddChatMessage(string.format(
+            "{00FF88}[Tactical Ping] {FFFFFF}Обновлено до {FFFF00}%s{FFFFFF}. Введите {FFFF00}/mreload TacticalPing_FB", remote_ver), -1)
+    end)
+end
+-- ============ КОНЕЦ АВТООБНОВЛЕНИЯ ============
+
 local iniFileName = 'TacticalPing.ini'
 local cfg = inicfg.load({
     settings = {
@@ -62,21 +183,21 @@ imgui.OnInitialize(function()
 end)
 
 imgui.OnFrame(function() return menu_state[0] end, function(player)
-    imgui.SetNextWindowSize(imgui.ImVec2(420, 290), imgui.Cond.FirstUseEver)
-    imgui.Begin(u8"��������� Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
-    
+    imgui.SetNextWindowSize(imgui.ImVec2(420, 380), imgui.Cond.FirstUseEver)
+    imgui.Begin(u8"Настройки Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
+
     local changed = false
-    
+
     imgui.PushItemWidth(180)
-    if imgui.ColorEdit3(u8"���� �����", c_color) then changed = true end
-    if imgui.SliderInt(u8"������", c_size, 4, 20) then changed = true end
-    if imgui.SliderFloat(u8"�������� (���)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
-    if imgui.SliderFloat(u8"����� ����� (���)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
-    if imgui.SliderFloat(u8"��������� (�)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
+    if imgui.ColorEdit3(u8"Цвет метки", c_color) then changed = true end
+    if imgui.SliderInt(u8"Размер", c_size, 4, 20) then changed = true end
+    if imgui.SliderFloat(u8"Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
+    if imgui.SliderFloat(u8"Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
+    if imgui.SliderFloat(u8"Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
     if imgui.Checkbox("Notifications for new pings", c_notifications) then changed = true end
     if imgui.Checkbox("Notification sound", c_notification_sound) then changed = true end
     imgui.PopItemWidth()
-    
+
     if changed then
         cfg.settings.cooldown = c_cooldown[0]
         cfg.settings.ping_lifetime = c_lifetime[0]
@@ -87,7 +208,26 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
         cfg.settings.notification_sound = c_notification_sound[0]
         inicfg.save(cfg, iniFileName)
     end
-    
+
+    -- ===== Блок автообновления =====
+    imgui.Separator()
+    imgui.Text(u8"Версия: " .. SCRIPT_VERSION)
+    if update_state.remote_version and update_state.remote_version ~= "" then
+        imgui.Text(u8"На GitHub: " .. update_state.remote_version)
+    end
+    imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), u8(update_state.status))
+
+    if update_state.checking or update_state.downloading then
+        imgui.BeginDisabled()
+    end
+    if imgui.Button(u8"Проверить обновления", imgui.ImVec2(200, 0)) then
+        check_and_update(false)
+    end
+    if update_state.checking or update_state.downloading then
+        imgui.EndDisabled()
+    end
+    -- ===== Конец блока автообновления =====
+
     imgui.End()
 end)
 
@@ -110,7 +250,7 @@ local function notify_ping(author, x, y, z)
     if cfg.settings.notifications then
         local px, py, pz = getCharCoordinates(PLAYER_PED)
         local dist = getDistanceBetweenCoords3d(px, py, pz, x, y, z)
-        sampAddChatMessage(string.format("{00FF88}[Tactical Ping] {FFFFFF}%s �������� �����. ����������: {FFFF00}%.0f �", tostring(author), dist), -1)
+        sampAddChatMessage(string.format("{00FF88}[Tactical Ping] {FFFFFF}%s поставил метку. Расстояние: {FFFF00}%.0f м", tostring(author), dist), -1)
     end
     if cfg.settings.notification_sound then
         addOneOffSound(0.0, 0.0, 0.0, 1056)
@@ -146,50 +286,50 @@ function clear_all_pings()
         if active_pings[i].blip then removeBlip(active_pings[i].blip) end
         table.remove(active_pings, i)
     end
-    sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}��� ����� �������.", -1)
+    sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Все метки очищены.", -1)
 end
 
 function toggle_last_ping_pin()
     local ping = active_pings[#active_pings]
     if not ping then
-        sampAddChatMessage("{FFAA00}[Tactical Ping] {FFFFFF}��� �������� �����.", -1)
+        sampAddChatMessage("{FFAA00}[Tactical Ping] {FFFFFF}Нет активных меток.", -1)
         return
     end
     ping.pinned = not ping.pinned
     if ping.pinned then
-        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}��������� ����� ���������� � �� �������� �� �������.", -1)
+        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Последняя метка закреплена и не исчезнет по таймеру.", -1)
     else
         ping.time = os.clock()
-        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}����������� �����.", -1)
+        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Закрепление снято.", -1)
     end
 end
 
 function place_ping_marker()
     local current_time = os.clock()
     local time_passed = current_time - last_ping_time
-    
+
     if time_passed >= cfg.settings.cooldown then
         local start_x, start_y
-        
+
         if memory.getuint8(0xB6F1A8) == 53 then
             start_x, start_y = convertGameScreenCoordsToWindowScreenCoords(339.5, 179.2)
         else
             local resX, resY = getScreenResolution()
             start_x, start_y = resX / 2, resY / 2
         end
-        
+
         local cam_x, cam_y, cam_z = getActiveCameraCoordinates()
         local cross_x, cross_y, cross_z = convertScreenCoordsToWorld3D(start_x, start_y, cfg.settings.render_dist)
-        
+
         local result, pointer = processLineOfSight(cam_x, cam_y, cam_z, cross_x, cross_y, cross_z, true, true, false, true, true, false, false)
-        
+
         local tx, ty, tz
         if result and pointer then
             tx, ty, tz = pointer.pos[1], pointer.pos[2], pointer.pos[3] + 0.5
         else
             tx, ty, tz = cross_x, cross_y, cross_z
         end
-        
+
         local send_x = math.floor(tx)
         local send_y = math.floor(ty)
         local send_z = math.floor(tz)
@@ -198,32 +338,32 @@ function place_ping_marker()
         add_ping(tx, ty, tz, myName, true)
 
         sampAddChatMessage(string.format("{00FF00}[Tactical Ping] {FFFFFF}Marker sent via {FFFF00}/fb {FFFFFF}[Point: %d, %d, %d]", send_x, send_y, send_z), -1)
-        -- TPING marks coordinate messages so ordinary faction chat is ignored.
         sampSendChat(string.format("/fb TPING %d %d %d %s", send_x, send_y, send_z, random_letters))
-        
+
         last_ping_time = current_time
     else
         local time_left = cfg.settings.cooldown - time_passed
-        sampAddChatMessage(string.format("{FF0000}[Tactical Ping] {FFFFFF}��������� %.1f ���. ����� ��������� ������!", time_left), -1)
+        sampAddChatMessage(string.format("{FF0000}[Tactical Ping] {FFFFFF}Подождите %.1f сек. перед следующей меткой!", time_left), -1)
     end
 end
 
 function main()
     if not isSampLoaded() or not isSampfuncsLoaded() then return end
     while not isSampAvailable() do wait(100) end
-    
+
     ping_font = renderCreateFont('Tahoma', 11, 5)
-    math.randomseed(os.time() + tonumber(tostring({}):sub(8)))
-    
+    math.randomseed(os.time() + math.floor(os.clock() * 1000000))
+
     local _, myId = sampGetPlayerIdByCharHandle(PLAYER_PED)
     myName = sampGetPlayerNickname(myId)
-    
-    sampAddChatMessage("{00FF00}[Tactical Ping] {FFFFFF}������ ��������! ����: {FFFF00}/pmenu {FFFFFF}| ���������: {FFFF00}/ppin {FFFFFF}| ��������: {FFFF00}/pclear", -1)
-    
+
+    sampAddChatMessage(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION), -1)
+    sampAddChatMessage("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear", -1)
+
     sampRegisterChatCommand('ping', function()
         place_ping_marker()
     end)
-    
+
     sampRegisterChatCommand('pmenu', function()
         menu_state[0] = not menu_state[0]
     end)
@@ -236,13 +376,19 @@ function main()
         clear_all_pings()
     end)
 
-    while true do 
-        wait(0) 
-        
+    -- Автопроверка обновлений при старте (тихо)
+    lua_thread.create(function()
+        wait(5000)
+        check_and_update(true)
+    end)
+
+    while true do
+        wait(0)
+
         if wasKeyPressed(vkeys.VK_MBUTTON) and not isPauseMenuActive() and not sampIsCursorActive() then
             place_ping_marker()
         end
-        
+
         for i = #active_pings, 1, -1 do
             local ping = active_pings[i]
             if not ping.pinned and os.clock() - ping.time > cfg.settings.ping_lifetime then
@@ -254,15 +400,15 @@ function main()
                     if sx and sy then
                         local px, py, pz = getCharCoordinates(PLAYER_PED)
                         local dist = getDistanceBetweenCoords3d(px, py, pz, ping.x, ping.y, ping.z)
-                        
+
                         local p_sz = cfg.settings.ping_size
                         local render_color = get_dx_ping_color()
-                        
+
                         renderDrawBox(sx - (p_sz/2), sy - (p_sz/2), p_sz, p_sz, render_color)
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
-                        
+
                         local pin_mark = ping.pinned and " [PIN]" or ""
-                        local text = string.format("���� [%.1f�]\n��: %s%s", dist, ping.author, pin_mark)
+                        local text = string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark)
                         renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, render_color)
                     end
                 end
@@ -273,21 +419,19 @@ end
 
 function sampev.onServerMessage(color, text)
     local clean_text = text:gsub("{.-}", "")
-    
-    if clean_text:find("%[������%] �� �� �������� � ������!") then
+
+    if clean_text:find("%[Ошибка%] Вы не состоите в группе!") then
         for i = #active_pings, 1, -1 do
-            if active_pings[i].author == "� (��)" and (os.clock() - active_pings[i].time) < 3.0 then
+            if active_pings[i].author == myName and (os.clock() - active_pings[i].time) < 3.0 then
                 if active_pings[i].blip then removeBlip(active_pings[i].blip) end
                 table.remove(active_pings, i)
-                sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}������: �� �� �������� � ������!", -1)
+                sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Отмена: Вы не состоите в группе!", -1)
                 break
             end
         end
         return
     end
-    
-    -- Expected organization chat: [F] ... Nick_Name[359]: (( TPING x y z token ))
-    -- Only messages containing TPING are treated as map markers.
+
     local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:.*TPING%s+([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)%s+[%a]+")
 
     if author and tx_str and ty_str and tz_str then
