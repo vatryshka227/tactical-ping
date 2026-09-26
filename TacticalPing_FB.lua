@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.3"
+local SCRIPT_VERSION = "1.0.4"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -138,7 +138,14 @@ local cfg = inicfg.load({
         ping_color = {0.2, 1.0, 0.2},
         notifications = true,
         notification_sound = true,
-        dedupe_radius = 12.0
+        dedupe_radius = 12.0,
+        show_distance = true,
+        show_author = true,
+        font_name = "Tahoma",
+        font_size = 11,
+        font_flags = 5,
+        font_color = {1.0, 1.0, 1.0},
+        alpha = 1.0
     }
 }, iniFileName)
 
@@ -147,6 +154,25 @@ if not cfg.settings.ping_size then cfg.settings.ping_size = 8 end
 if cfg.settings.notifications == nil then cfg.settings.notifications = true end
 if cfg.settings.notification_sound == nil then cfg.settings.notification_sound = true end
 if not cfg.settings.dedupe_radius then cfg.settings.dedupe_radius = 12.0 end
+if cfg.settings.show_distance == nil then cfg.settings.show_distance = true end
+if cfg.settings.show_author == nil then cfg.settings.show_author = true end
+if not cfg.settings.font_name then cfg.settings.font_name = "Tahoma" end
+if not cfg.settings.font_size then cfg.settings.font_size = 11 end
+if not cfg.settings.font_flags then cfg.settings.font_flags = 5 end
+if type(cfg.settings.font_color) ~= "table" then cfg.settings.font_color = {1.0, 1.0, 1.0} end
+if not cfg.settings.alpha then cfg.settings.alpha = 1.0 end
+
+local font_list = {
+    "Tahoma", "Arial", "Verdana", "Courier New",
+    "Impact", "Comic Sans MS", "Times New Roman"
+}
+local font_flags_list = {
+    {name = "Обычный", flag = 4},
+    {name = "Жирный", flag = 5},
+    {name = "Курсив", flag = 6},
+    {name = "Жирный + Курсив", flag = 7},
+    {name = "С тенью", flag = 20}
+}
 
 local menu_state = imgui.new.bool(false)
 local c_cooldown = imgui.new.float(cfg.settings.cooldown)
@@ -156,11 +182,27 @@ local c_size = imgui.new.int(cfg.settings.ping_size)
 local c_color = imgui.new.float[3](cfg.settings.ping_color[1], cfg.settings.ping_color[2], cfg.settings.ping_color[3])
 local c_notifications = imgui.new.bool(cfg.settings.notifications)
 local c_notification_sound = imgui.new.bool(cfg.settings.notification_sound)
+local c_show_distance = imgui.new.bool(cfg.settings.show_distance)
+local c_show_author = imgui.new.bool(cfg.settings.show_author)
+local c_font_size = imgui.new.int(cfg.settings.font_size)
+local c_font_flags = imgui.new.int(cfg.settings.font_flags)
+local c_font_color = imgui.new.float[3](cfg.settings.font_color[1], cfg.settings.font_color[2], cfg.settings.font_color[3])
+local c_alpha = imgui.new.float(cfg.settings.alpha)
 
 local active_pings = {}
 local last_ping_time = 0
 local ping_font = nil
+local current_font_name = cfg.settings.font_name
+local current_font_flags = cfg.settings.font_flags
 local myName = "Unknown"
+
+local function rebuild_font()
+    if ping_font then
+        renderReleaseFont(ping_font)
+        ping_font = nil
+    end
+    ping_font = renderCreateFont(current_font_name, cfg.settings.font_size, current_font_flags)
+end
 
 imgui.OnInitialize(function()
     local style = imgui.GetStyle()
@@ -178,20 +220,90 @@ imgui.OnInitialize(function()
 end)
 
 imgui.OnFrame(function() return menu_state[0] end, function(player)
-    imgui.SetNextWindowSize(imgui.ImVec2(420, 400), imgui.Cond.FirstUseEver)
+    imgui.SetNextWindowSize(imgui.ImVec2(460, 560), imgui.Cond.FirstUseEver)
     imgui.Begin("Настройки Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
 
     local changed = false
 
-    imgui.PushItemWidth(180)
-    if imgui.ColorEdit3("Цвет метки", c_color) then changed = true end
-    if imgui.SliderInt("Размер", c_size, 4, 20) then changed = true end
-    if imgui.SliderFloat("Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
-    if imgui.SliderFloat("Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
-    if imgui.SliderFloat("Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
-    if imgui.Checkbox("Уведомления о новых метках", c_notifications) then changed = true end
-    if imgui.Checkbox("Звук уведомления", c_notification_sound) then changed = true end
-    imgui.PopItemWidth()
+    -- ===== Основные =====
+    if imgui.CollapsingHeader("Основные") then
+        imgui.PushItemWidth(180)
+        if imgui.ColorEdit3("Цвет метки", c_color) then changed = true end
+        if imgui.SliderInt("Размер метки", c_size, 4, 20) then changed = true end
+        if imgui.SliderFloat("Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
+        if imgui.SliderFloat("Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
+        if imgui.SliderFloat("Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
+        imgui.PopItemWidth()
+    end
+
+    -- ===== Текст метки =====
+    if imgui.CollapsingHeader("Текст метки") then
+        if imgui.Checkbox("Показывать дистанцию", c_show_distance) then changed = true end
+        if imgui.Checkbox("Показывать имя автора", c_show_author) then changed = true end
+
+        imgui.PushItemWidth(180)
+
+        -- Выбор шрифта
+        if imgui.BeginCombo("Шрифт", current_font_name) then
+            for _, name in ipairs(font_list) do
+                local selected = (name == current_font_name)
+                if imgui.Selectable(name, selected) then
+                    current_font_name = name
+                    cfg.settings.font_name = name
+                    rebuild_font()
+                    changed = true
+                end
+                if selected then imgui.SetItemDefaultFocus() end
+            end
+            imgui.EndCombo()
+        end
+
+        -- Размер шрифта
+        if imgui.SliderInt("Размер шрифта", c_font_size, 8, 20) then
+            cfg.settings.font_size = c_font_size[0]
+            rebuild_font()
+            changed = true
+        end
+
+        -- Стиль шрифта
+        local current_flag_name = "Обычный"
+        for _, f in ipairs(font_flags_list) do
+            if f.flag == current_font_flags then current_flag_name = f.name end
+        end
+        if imgui.BeginCombo("Стиль шрифта", current_flag_name) then
+            for _, f in ipairs(font_flags_list) do
+                local selected = (f.flag == current_font_flags)
+                if imgui.Selectable(f.name, selected) then
+                    current_font_flags = f.flag
+                    cfg.settings.font_flags = f.flag
+                    rebuild_font()
+                    changed = true
+                end
+                if selected then imgui.SetItemDefaultFocus() end
+            end
+            imgui.EndCombo()
+        end
+
+        -- Цвет шрифта
+        if imgui.ColorEdit3("Цвет текста", c_font_color) then
+            cfg.settings.font_color = {c_font_color[0], c_font_color[1], c_font_color[2]}
+            changed = true
+        end
+
+        -- Прозрачность
+        if imgui.SliderFloat("Прозрачность", c_alpha, 0.1, 1.0, "%.2f") then
+            cfg.settings.alpha = c_alpha[0]
+            changed = true
+        end
+
+        imgui.PopItemWidth()
+    end
+
+    -- ===== Уведомления =====
+    if imgui.CollapsingHeader("Уведомления") then
+        if imgui.Checkbox("Уведомления о новых метках", c_notifications) then changed = true end
+        if imgui.Checkbox("Звук уведомления", c_notification_sound) then changed = true end
+    end
 
     if changed then
         cfg.settings.cooldown = c_cooldown[0]
@@ -201,25 +313,27 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
         cfg.settings.ping_color = {c_color[0], c_color[1], c_color[2]}
         cfg.settings.notifications = c_notifications[0]
         cfg.settings.notification_sound = c_notification_sound[0]
+        cfg.settings.show_distance = c_show_distance[0]
+        cfg.settings.show_author = c_show_author[0]
         inicfg.save(cfg, iniFileName)
     end
 
-    -- ===== Блок автообновления =====
-    imgui.Separator()
-    imgui.Text("Версия: " .. SCRIPT_VERSION)
-    if update_state.remote_version and update_state.remote_version ~= "" then
-        imgui.Text("На GitHub: " .. update_state.remote_version)
-    end
-    imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), update_state.status)
+    -- ===== Обновление =====
+    if imgui.CollapsingHeader("Обновление") then
+        imgui.Text("Версия: " .. SCRIPT_VERSION)
+        if update_state.remote_version and update_state.remote_version ~= "" then
+            imgui.Text("На GitHub: " .. update_state.remote_version)
+        end
+        imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), update_state.status)
 
-    if update_state.checking or update_state.downloading then
-        imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), "Подождите...")
-    else
-        if imgui.Button("Проверить обновления", imgui.ImVec2(200, 0)) then
-            check_and_update(false)
+        if update_state.checking or update_state.downloading then
+            imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), "Подождите...")
+        else
+            if imgui.Button("Проверить обновления", imgui.ImVec2(200, 0)) then
+                check_and_update(false)
+            end
         end
     end
-    -- ===== Конец блока автообновления =====
 
     imgui.End()
 end)
@@ -228,7 +342,16 @@ function get_dx_ping_color()
     local r = math.floor(cfg.settings.ping_color[1] * 255)
     local g = math.floor(cfg.settings.ping_color[2] * 255)
     local b = math.floor(cfg.settings.ping_color[3] * 255)
-    return bit.bor(0xFF000000, bit.lshift(r, 16), bit.lshift(g, 8), b)
+    local a = math.floor(cfg.settings.alpha * 255)
+    return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
+end
+
+function get_dx_font_color()
+    local r = math.floor(cfg.settings.font_color[1] * 255)
+    local g = math.floor(cfg.settings.font_color[2] * 255)
+    local b = math.floor(cfg.settings.font_color[3] * 255)
+    local a = math.floor(cfg.settings.alpha * 255)
+    return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
 end
 
 local function notify_ping(author, x, y, z)
@@ -338,7 +461,9 @@ function main()
     if not isSampLoaded() or not isSampfuncsLoaded() then return end
     while not isSampAvailable() do wait(100) end
 
-    ping_font = renderCreateFont('Tahoma', 11, 5)
+    current_font_name = cfg.settings.font_name
+    current_font_flags = cfg.settings.font_flags
+    rebuild_font()
     math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 
     local _, myId = sampGetPlayerIdByCharHandle(PLAYER_PED)
@@ -393,9 +518,20 @@ function main()
                         renderDrawBox(sx - (p_sz/2), sy - (p_sz/2), p_sz, p_sz, render_color)
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
 
-                        local pin_mark = ping.pinned and " [PIN]" or ""
-                        local text = cp(string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark))
-                        renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, render_color)
+                        -- Формируем текст по настройкам
+                        local lines = {}
+                        if cfg.settings.show_distance then
+                            table.insert(lines, string.format("ЦЕЛЬ [%.1fм]", dist))
+                        else
+                            table.insert(lines, "ЦЕЛЬ")
+                        end
+                        if cfg.settings.show_author then
+                            local pin_mark = ping.pinned and " [PIN]" or ""
+                            table.insert(lines, "От: " .. ping.author .. pin_mark)
+                        end
+
+                        local text = cp(table.concat(lines, "\n"))
+                        renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, get_dx_font_color())
                     end
                 end
             end
@@ -418,7 +554,6 @@ function sampev.onServerMessage(color, text)
         return
     end
 
-    -- Новый парсер: ловит (( x y z )) без TPING
     local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:%s*%(%(%s*([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)%s*%)%)")
 
     if author and tx_str and ty_str and tz_str then
@@ -438,6 +573,7 @@ end
 
 function onScriptTerminate(script, quitGame)
     if script == thisScript() then
+        if ping_font then renderReleaseFont(ping_font) end
         for i, ping in ipairs(active_pings) do
             if ping.blip then removeBlip(ping.blip) end
         end
