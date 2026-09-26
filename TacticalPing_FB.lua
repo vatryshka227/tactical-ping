@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.11"
+local SCRIPT_VERSION = "1.0.12"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -531,6 +531,8 @@ local function add_ping(x, y, z, author, local_ping)
     end
 
     local blip = addSpriteBlipForCoord(x, y, z, 41)
+	currentCheckpoint = createCheckpoint(1, x, y, z, x, y, z, 5.0)
+	checkpointPos = {x = x, y = y, z = z}
     changeBlipColour(blip, 2)
 
     local ping = {
