@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.6"
+local SCRIPT_VERSION = "1.0.7"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -368,7 +368,21 @@ local function find_duplicate_ping(x, y, z)
     return nil
 end
 
+-- Удаляет все метки указанного автора (кроме закреплённых)
+local function remove_pings_by_author(author)
+    for i = #active_pings, 1, -1 do
+        local ping = active_pings[i]
+        if ping.author == author and not ping.pinned then
+            if ping.blip then removeBlip(ping.blip) end
+            table.remove(active_pings, i)
+        end
+    end
+end
+
 local function add_ping(x, y, z, author, local_ping)
+    -- Удаляем старые метки этого же автора
+    remove_pings_by_author(author)
+
     local duplicate = find_duplicate_ping(x, y, z)
     if duplicate then
         if not duplicate.pinned then duplicate.time = os.clock() end
@@ -540,13 +554,7 @@ function main()
 end
 
 function sampev.onServerMessage(color, text)
-    -- Убираем только корректные цветовые коды {XXXXXX}, не трогая остальное
     local clean_text = text:gsub("{%x%x%x%x%x%x}", "")
-
-    -- Отладка (раскомментируй, если метки не появляются)
-    -- if clean_text:find("%(%(") then
-    --     sampAddChatMessage("{FFFF00}[DEBUG] " .. clean_text, -1)
-    -- end
 
     if clean_text:find("%[Ошибка%] Вы не состоите в группе!") then
         for i = #active_pings, 1, -1 do
@@ -560,8 +568,6 @@ function sampev.onServerMessage(color, text)
         return
     end
 
-    -- Ищем ник[ID]: (( x y z ))
-    -- Поддерживает ранг и эмодзи перед ником: "[F] [🥵] Падре Theodore_Tredd[277]: (( 2770 -1616 10 ))"
     local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:%s*%(%(%s*([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)")
 
     if author and tx_str and ty_str and tz_str then
