@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.9"
+local SCRIPT_VERSION = "1.0.11"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -227,111 +227,93 @@ local function rebuild_font()
     ping_font = renderCreateFont(current_font_name, cfg.settings.font_size, current_font_flags)
 end
 
--- Отрисовка иконки метки в зависимости от выбранного типа
+-- Отрисовка иконки метки в мире (без белого центра)
 local function draw_ping_icon(sx, sy, size, color)
     local half = size / 2
-    local quarter = size / 4
 
     if current_icon_id == 0 then
         renderDrawBox(sx - half, sy - half, size, size, color)
-        renderDrawBox(sx - quarter, sy - quarter, size/2, size/2, 0xFFFFFFFF)
     elseif current_icon_id == 1 then
-        local step = size / 6
-        for i = 0, 6 do
-            local w = size - i * step
-            renderDrawBox(sx - w/2, sy - half + i * (size/6), w, size/12 + 1, color)
+        for i = 0, size - 1 do
+            local w = size - i * 2
+            if w < 1 then break end
+            renderDrawBox(sx - w/2, sy - half + i, w, 1, color)
         end
-        renderDrawBox(sx - quarter, sy - quarter, size/2, size/2, 0xFFFFFFFF)
     elseif current_icon_id == 2 then
-        local step = size / 8
-        for i = 0, 3 do
-            local w = size - i * step * 2
-            renderDrawBox(sx - w/2, sy - half + i * step, w, step, color)
+        for i = 0, size - 1 do
+            local w
+            if i <= half then
+                w = i * 2
+            else
+                w = (size - i) * 2
+            end
+            if w < 1 then w = 1 end
+            renderDrawBox(sx - w/2, sy - half + i, w, 1, color)
         end
-        for i = 0, 3 do
-            local w = size/2 + i * step * 2
-            renderDrawBox(sx - w/2, sy + quarter + i * step, w, step, color)
-        end
-        renderDrawBox(sx - quarter, sy - quarter, size/2, size/2, 0xFFFFFFFF)
     elseif current_icon_id == 3 then
-        renderDrawBox(sx - half, sy - quarter/2, size, quarter, color)
-        renderDrawBox(sx - quarter/2, sy - half, quarter, size, color)
-        renderDrawBox(sx - quarter, sy - quarter, size/2, size/2, 0xFFFFFFFF)
+        renderDrawBox(sx - half, sy - size/8, size, size/4, color)
+        renderDrawBox(sx - size/8, sy - half, size/4, size, color)
     end
 end
 
--- Отрисовка стрелки-указателя у края экрана
+-- Стрелка-указатель у края экрана (залитая)
 local function draw_offscreen_arrow(px, py, pz)
-    local cam_x, cam_y, cam_z = getActiveCameraCoordinates()
-    local dx = px - cam_x
-    local dy = py - cam_y
-    local dz = pz - cam_z
-
-    -- Направление в градусах
-    local angle = math.atan2(dy, dx)
-
-    -- Угол камеры (направление взгляда)
-    local cam_angle = math.atan2(
-        getActiveCameraCoordinates and select(2, getActiveCameraCoordinates()) or 0,
-        0
-    )
-
-    -- Используем матрицу камеры для правильного направления
-    -- Через convert3DCoordsToScreen получаем относительное положение
-    local screen_x, screen_y = convert3DCoordsToScreen(px, py, pz)
     local resX, resY = getScreenResolution()
+    local cx, cy = resX / 2, resY / 2
 
-    -- Если метка ЗА камерой — convert3DCoordsToScreen вернёт неверные значения
-    -- Поэтому используем направление через угол
-    local target_angle = math.deg(math.atan2(dx, dy))
+    local screen_x, screen_y = convert3DCoordsToScreen(px, py, pz)
+    if not screen_x or not screen_y then return end
 
-    -- Получаем угол камеры через getCameraRotation? Нет такой функции.
-    -- Используем проверку: если screen_x/screen_y выходят за пределы — рисуем стрелку.
-
-    if not screen_x or not screen_y then
-        -- Не можем определить — рисуем в углу
-        screen_x, screen_y = resX / 2, resY / 2
-    end
-
-    -- Ограничиваем координаты стрелки краями экрана
     local margin = cfg.settings.offscreen_margin
     local arrow_size = cfg.settings.offscreen_size
 
-    local ax = math.max(margin, math.min(resX - margin, screen_x))
-    local ay = math.max(margin, math.min(resY - margin, screen_y))
-
-    -- Если метка в пределах экрана — не рисуем стрелку
     if screen_x > margin and screen_x < resX - margin
        and screen_y > margin and screen_y < resY - margin then
         return
     end
 
-    -- Направление стрелки — от центра экрана к метке
-    local cx, cy = resX / 2, resY / 2
-    local dir_x = ax - cx
-    local dir_y = ay - cy
+    local dir_x = screen_x - cx
+    local dir_y = screen_y - cy
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
-    if len > 0 then
-        dir_x = dir_x / len
-        dir_y = dir_y / len
-    end
+    if len < 0.001 then return end
+    dir_x = dir_x / len
+    dir_y = dir_y / len
 
-    -- Рисуем стрелку (треугольник) в точке (ax, ay), направленный по (dir_x, dir_y)
-    local color = get_dx_ping_color()
+    local ax = math.max(margin, math.min(resX - margin, screen_x))
+    local ay = math.max(margin, math.min(resY - margin, screen_y))
+
     local perp_x = -dir_y
     local perp_y = dir_x
 
-    local tip_x = ax + dir_x * arrow_size
-    local tip_y = ay + dir_y * arrow_size
-    local base1_x = ax - dir_x * arrow_size * 0.5 + perp_x * arrow_size * 0.6
-    local base1_y = ay - dir_y * arrow_size * 0.5 + perp_y * arrow_size * 0.6
-    local base2_x = ax - dir_x * arrow_size * 0.5 - perp_x * arrow_size * 0.6
-    local base2_y = ay - dir_y * arrow_size * 0.5 - perp_y * arrow_size * 0.6
+    local tip_len = arrow_size * 0.7
+    local base_half = arrow_size * 0.6
 
-    -- Рисуем толстые линии через renderDrawLine
-    renderDrawLine(tip_x, tip_y, base1_x, base1_y, 3, color)
-    renderDrawLine(tip_x, tip_y, base2_x, base2_y, 3, color)
-    renderDrawLine(base1_x, base1_y, base2_x, base2_y, 3, color)
+    local tip_x = ax + dir_x * tip_len
+    local tip_y = ay + dir_y * tip_len
+    local base1_x = ax - dir_x * tip_len * 0.5 + perp_x * base_half
+    local base1_y = ay - dir_y * tip_len * 0.5 + perp_y * base_half
+    local base2_x = ax - dir_x * tip_len * 0.5 - perp_x * base_half
+    local base2_y = ay - dir_y * tip_len * 0.5 - perp_y * base_half
+
+    local color = get_dx_ping_color()
+
+    local steps = math.max(4, math.floor(arrow_size))
+    for s = 0, steps do
+        local t = s / steps
+        local lx1 = base1_x + (tip_x - base1_x) * t
+        local ly1 = base1_y + (tip_y - base1_y) * t
+        local lx2 = base2_x + (tip_x - base2_x) * t
+        local ly2 = base2_y + (tip_y - base2_y) * t
+
+        local line_len = math.sqrt((lx2-lx1)^2 + (ly2-ly1)^2)
+        local line_steps = math.max(1, math.floor(line_len))
+        for k = 0, line_steps do
+            local tt = k / line_steps
+            local dot_x = lx1 + (lx2 - lx1) * tt
+            local dot_y = ly1 + (ly2 - ly1) * tt
+            renderDrawBox(dot_x - 1, dot_y - 1, 2, 2, color)
+        end
+    end
 end
 
 imgui.OnInitialize(function()
@@ -743,7 +725,6 @@ function main()
                         renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, get_dx_font_color())
                     end
                 else
-                    -- Метка за экраном — рисуем стрелку-указатель
                     if cfg.settings.offscreen_arrows then
                         draw_offscreen_arrow(ping.x, ping.y, ping.z)
                     end
