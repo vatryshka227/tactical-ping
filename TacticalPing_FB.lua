@@ -12,11 +12,10 @@ local encoding = require 'encoding'
 encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 
--- Хелпер: UTF-8 -> CP1251 для чата и рендера
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.0"
+local SCRIPT_VERSION = "1.0.1"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -232,6 +231,14 @@ function get_dx_ping_color()
     return bit.bor(0xFF000000, bit.lshift(r, 16), bit.lshift(g, 8), b)
 end
 
+-- Цвет blip в формате ABGR (как у SA-MP)
+function get_blip_color()
+    local r = math.floor(cfg.settings.ping_color[1] * 255)
+    local g = math.floor(cfg.settings.ping_color[2] * 255)
+    local b = math.floor(cfg.settings.ping_color[3] * 255)
+    return bit.bor(0xFF000000, bit.lshift(b, 16), bit.lshift(g, 8), r)
+end
+
 function generate_anti_flood_string(length)
     local str = ""
     for i = 1, length do
@@ -268,7 +275,13 @@ local function add_ping(x, y, z, author, local_ping)
         if not duplicate.pinned then duplicate.time = os.clock() end
         return duplicate, false
     end
+
     local blip = addBlipForCoord(x, y, z)
+    setBlipSprite(blip, 41)          -- 41 = стрелка вверх
+    setBlipColor(blip, get_blip_color())  -- цвет из настроек
+    setBlipDisplay(blip, 4)          -- 4 = карта + мини-карта
+    setBlipScale(blip, 1.5)          -- размер иконки
+
     local ping = {x = x, y = y, z = z, time = os.clock(), author = author, blip = blip, pinned = false}
     table.insert(active_pings, ping)
     if not local_ping then notify_ping(author, x, y, z) end
