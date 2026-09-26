@@ -12,6 +12,9 @@ local encoding = require 'encoding'
 encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 
+-- Хелпер: UTF-8 -> CP1251 для чата и рендера
+local function cp(s) return u8:decode(s) end
+
 -- ============ АВТООБНОВЛЕНИЕ ============
 local SCRIPT_VERSION = "1.0.0"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
@@ -59,7 +62,7 @@ local function check_and_update(silent)
             update_state.checking = false
             update_state.status = "Ошибка: не удалось скачать versions.txt"
             if not silent then
-                sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Не удалось проверить обновления (версия).", -1)
+                sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Не удалось проверить обновления (версия)."), -1)
             end
             return
         end
@@ -76,16 +79,14 @@ local function check_and_update(silent)
         if not is_newer(remote_ver, SCRIPT_VERSION) then
             update_state.status = "Актуальная версия (" .. SCRIPT_VERSION .. ")"
             if not silent then
-                sampAddChatMessage(string.format(
-                    "{00FF88}[Tactical Ping] {FFFFFF}У вас последняя версия: {FFFF00}%s", SCRIPT_VERSION), -1)
+                sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}У вас последняя версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
             end
             return
         end
 
         update_state.downloading = true
         update_state.status = "Скачивание " .. remote_ver .. "..."
-        sampAddChatMessage(string.format(
-            "{00FF88}[Tactical Ping] {FFFFFF}Найдена новая версия {FFFF00}%s{FFFFFF}. Скачиваю...", remote_ver), -1)
+        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Найдена новая версия {FFFF00}%s{FFFFFF}. Скачиваю...", remote_ver)), -1)
 
         if doesFileExist(UPDATE_TMP) then os.remove(UPDATE_TMP) end
         downloadUrlToFile(UPDATE_URL_SCRIPT, UPDATE_TMP)
@@ -98,7 +99,7 @@ local function check_and_update(silent)
         if not doesFileExist(UPDATE_TMP) then
             update_state.downloading = false
             update_state.status = "Ошибка скачивания скрипта"
-            sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Не удалось скачать обновление.", -1)
+            sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Не удалось скачать обновление."), -1)
             return
         end
 
@@ -109,7 +110,7 @@ local function check_and_update(silent)
             os.remove(UPDATE_TMP)
             update_state.downloading = false
             update_state.status = "Ошибка: файл повреждён"
-            sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Скачанный файл повреждён или пуст.", -1)
+            sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Скачанный файл повреждён или пуст."), -1)
             return
         end
 
@@ -123,8 +124,7 @@ local function check_and_update(silent)
 
         update_state.downloading = false
         update_state.status = "Обновлено до " .. remote_ver .. ". Введите /mreload"
-        sampAddChatMessage(string.format(
-            "{00FF88}[Tactical Ping] {FFFFFF}Обновлено до {FFFF00}%s{FFFFFF}. Введите {FFFF00}/mreload TacticalPing_FB", remote_ver), -1)
+        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Обновлено до {FFFF00}%s{FFFFFF}. Введите {FFFF00}/mreload TacticalPing_FB", remote_ver)), -1)
     end)
 end
 -- ============ КОНЕЦ АВТООБНОВЛЕНИЯ ============
@@ -244,7 +244,7 @@ local function notify_ping(author, x, y, z)
     if cfg.settings.notifications then
         local px, py, pz = getCharCoordinates(PLAYER_PED)
         local dist = getDistanceBetweenCoords3d(px, py, pz, x, y, z)
-        sampAddChatMessage(string.format("{00FF88}[Tactical Ping] {FFFFFF}%s поставил метку. Расстояние: {FFFF00}%.0f м", tostring(author), dist), -1)
+        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}%s поставил метку. Расстояние: {FFFF00}%.0f м", tostring(author), dist)), -1)
     end
     if cfg.settings.notification_sound then
         addOneOffSound(0.0, 0.0, 0.0, 1056)
@@ -280,21 +280,21 @@ function clear_all_pings()
         if active_pings[i].blip then removeBlip(active_pings[i].blip) end
         table.remove(active_pings, i)
     end
-    sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Все метки очищены.", -1)
+    sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Все метки очищены."), -1)
 end
 
 function toggle_last_ping_pin()
     local ping = active_pings[#active_pings]
     if not ping then
-        sampAddChatMessage("{FFAA00}[Tactical Ping] {FFFFFF}Нет активных меток.", -1)
+        sampAddChatMessage(cp("{FFAA00}[Tactical Ping] {FFFFFF}Нет активных меток."), -1)
         return
     end
     ping.pinned = not ping.pinned
     if ping.pinned then
-        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Последняя метка закреплена и не исчезнет по таймеру.", -1)
+        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Последняя метка закреплена и не исчезнет по таймеру."), -1)
     else
         ping.time = os.clock()
-        sampAddChatMessage("{00FF88}[Tactical Ping] {FFFFFF}Закрепление снято.", -1)
+        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Закрепление снято."), -1)
     end
 end
 
@@ -331,13 +331,13 @@ function place_ping_marker()
 
         add_ping(tx, ty, tz, myName, true)
 
-        sampAddChatMessage(string.format("{00FF00}[Tactical Ping] {FFFFFF}Marker sent via {FFFF00}/fb {FFFFFF}[Point: %d, %d, %d]", send_x, send_y, send_z), -1)
+        sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Marker sent via {FFFF00}/fb {FFFFFF}[Point: %d, %d, %d]", send_x, send_y, send_z)), -1)
         sampSendChat(string.format("/fb TPING %d %d %d %s", send_x, send_y, send_z, random_letters))
 
         last_ping_time = current_time
     else
         local time_left = cfg.settings.cooldown - time_passed
-        sampAddChatMessage(string.format("{FF0000}[Tactical Ping] {FFFFFF}Подождите %.1f сек. перед следующей меткой!", time_left), -1)
+        sampAddChatMessage(cp(string.format("{FF0000}[Tactical Ping] {FFFFFF}Подождите %.1f сек. перед следующей меткой!", time_left)), -1)
     end
 end
 
@@ -351,8 +351,8 @@ function main()
     local _, myId = sampGetPlayerIdByCharHandle(PLAYER_PED)
     myName = sampGetPlayerNickname(myId)
 
-    sampAddChatMessage(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION), -1)
-    sampAddChatMessage("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear", -1)
+    sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
+    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear"), -1)
 
     sampRegisterChatCommand('ping', function()
         place_ping_marker()
@@ -401,8 +401,7 @@ function main()
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
 
                         local pin_mark = ping.pinned and " [PIN]" or ""
-                        -- Конвертируем UTF-8 -> CP1251 для renderFontDrawText
-                        local text = u8:decode(string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark))
+                        local text = cp(string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark))
                         renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, render_color)
                     end
                 end
@@ -419,7 +418,7 @@ function sampev.onServerMessage(color, text)
             if active_pings[i].author == myName and (os.clock() - active_pings[i].time) < 3.0 then
                 if active_pings[i].blip then removeBlip(active_pings[i].blip) end
                 table.remove(active_pings, i)
-                sampAddChatMessage("{FF0000}[Tactical Ping] {FFFFFF}Отмена: Вы не состоите в группе!", -1)
+                sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Отмена: Вы не состоите в группе!"), -1)
                 break
             end
         end
