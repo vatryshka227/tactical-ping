@@ -7,6 +7,10 @@ local vkeys = require 'vkeys'
 local imgui = require 'mimgui'
 local inicfg = require 'inicfg'
 local bit = require 'bit'
+local encoding = require 'encoding'
+
+encoding.default = 'CP1251'
+local u8 = encoding.UTF8
 
 -- ============ АВТООБНОВЛЕНИЕ ============
 local SCRIPT_VERSION = "1.0.0"
@@ -397,7 +401,8 @@ function main()
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
 
                         local pin_mark = ping.pinned and " [PIN]" or ""
-                        local text = string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark)
+                        -- Конвертируем UTF-8 -> CP1251 для renderFontDrawText
+                        local text = u8:decode(string.format("ЦЕЛЬ [%.1fм]\nОт: %s%s", dist, ping.author, pin_mark))
                         renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, render_color)
                     end
                 end
