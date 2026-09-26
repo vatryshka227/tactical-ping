@@ -6,11 +6,7 @@ local memory = require 'memory'
 local vkeys = require 'vkeys'
 local imgui = require 'mimgui'
 local inicfg = require 'inicfg'
-local encoding = require 'encoding'
 local bit = require 'bit'
-
-encoding.default = 'CP1251'
-local u8 = encoding.UTF8
 
 -- ============ АВТООБНОВЛЕНИЕ ============
 local SCRIPT_VERSION = "1.0.0"
@@ -180,18 +176,18 @@ end)
 
 imgui.OnFrame(function() return menu_state[0] end, function(player)
     imgui.SetNextWindowSize(imgui.ImVec2(420, 400), imgui.Cond.FirstUseEver)
-    imgui.Begin(u8"Настройки Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
+    imgui.Begin("Настройки Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
 
     local changed = false
 
     imgui.PushItemWidth(180)
-    if imgui.ColorEdit3(u8"Цвет метки", c_color) then changed = true end
-    if imgui.SliderInt(u8"Размер", c_size, 4, 20) then changed = true end
-    if imgui.SliderFloat(u8"Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
-    if imgui.SliderFloat(u8"Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
-    if imgui.SliderFloat(u8"Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
-    if imgui.Checkbox(u8"Уведомления о новых метках", c_notifications) then changed = true end
-    if imgui.Checkbox(u8"Звук уведомления", c_notification_sound) then changed = true end
+    if imgui.ColorEdit3("Цвет метки", c_color) then changed = true end
+    if imgui.SliderInt("Размер", c_size, 4, 20) then changed = true end
+    if imgui.SliderFloat("Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
+    if imgui.SliderFloat("Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
+    if imgui.SliderFloat("Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
+    if imgui.Checkbox("Уведомления о новых метках", c_notifications) then changed = true end
+    if imgui.Checkbox("Звук уведомления", c_notification_sound) then changed = true end
     imgui.PopItemWidth()
 
     if changed then
@@ -207,16 +203,16 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
 
     -- ===== Блок автообновления =====
     imgui.Separator()
-    imgui.Text(u8"Версия: " .. SCRIPT_VERSION)
+    imgui.Text("Версия: " .. SCRIPT_VERSION)
     if update_state.remote_version and update_state.remote_version ~= "" then
-        imgui.Text(u8"На GitHub: " .. update_state.remote_version)
+        imgui.Text("На GitHub: " .. update_state.remote_version)
     end
-    imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), u8(update_state.status))
+    imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), update_state.status)
 
     if update_state.checking or update_state.downloading then
-        imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), u8"Подождите...")
+        imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), "Подождите...")
     else
-        if imgui.Button(u8"Проверить обновления", imgui.ImVec2(200, 0)) then
+        if imgui.Button("Проверить обновления", imgui.ImVec2(200, 0)) then
             check_and_update(false)
         end
     end
