@@ -231,14 +231,6 @@ function get_dx_ping_color()
     return bit.bor(0xFF000000, bit.lshift(r, 16), bit.lshift(g, 8), b)
 end
 
--- Цвет blip в формате ABGR (как у SA-MP)
-function get_blip_color()
-    local r = math.floor(cfg.settings.ping_color[1] * 255)
-    local g = math.floor(cfg.settings.ping_color[2] * 255)
-    local b = math.floor(cfg.settings.ping_color[3] * 255)
-    return bit.bor(0xFF000000, bit.lshift(b, 16), bit.lshift(g, 8), r)
-end
-
 function generate_anti_flood_string(length)
     local str = ""
     for i = 1, length do
@@ -276,11 +268,10 @@ local function add_ping(x, y, z, author, local_ping)
         return duplicate, false
     end
 
-    local blip = addBlipForCoord(x, y, z)
-    setBlipSprite(blip, 41)          -- 41 = стрелка вверх
-    setBlipColor(blip, get_blip_color())  -- цвет из настроек
-    setBlipDisplay(blip, 4)          -- 4 = карта + мини-карта
-    setBlipScale(blip, 1.5)          -- размер иконки
+    -- SA-MP blip: addSpriteBlipForCoord(x, y, z, icon)
+    -- icon 41 = radar_waypoint (стрелка цели)
+    local blip = addSpriteBlipForCoord(x, y, z, 41)
+    changeBlipColour(blip, 2) -- 2 = зелёный (палитра SA)
 
     local ping = {x = x, y = y, z = z, time = os.clock(), author = author, blip = blip, pinned = false}
     table.insert(active_pings, ping)
