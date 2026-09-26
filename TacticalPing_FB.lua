@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.2"
+local SCRIPT_VERSION = "1.0.3"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -231,14 +231,6 @@ function get_dx_ping_color()
     return bit.bor(0xFF000000, bit.lshift(r, 16), bit.lshift(g, 8), b)
 end
 
-function generate_anti_flood_string(length)
-    local str = ""
-    for i = 1, length do
-        str = str .. string.char(math.random(97, 122))
-    end
-    return str
-end
-
 local function notify_ping(author, x, y, z)
     if cfg.settings.notifications then
         local px, py, pz = getCharCoordinates(PLAYER_PED)
@@ -268,10 +260,8 @@ local function add_ping(x, y, z, author, local_ping)
         return duplicate, false
     end
 
-    -- SA-MP blip: addSpriteBlipForCoord(x, y, z, icon)
-    -- icon 41 = radar_waypoint (стрелка цели)
     local blip = addSpriteBlipForCoord(x, y, z, 41)
-    changeBlipColour(blip, 2) -- 2 = зелёный (палитра SA)
+    changeBlipColour(blip, 2)
 
     local ping = {x = x, y = y, z = z, time = os.clock(), author = author, blip = blip, pinned = false}
     table.insert(active_pings, ping)
@@ -331,12 +321,11 @@ function place_ping_marker()
         local send_x = math.floor(tx)
         local send_y = math.floor(ty)
         local send_z = math.floor(tz)
-        local random_letters = generate_anti_flood_string(math.random(2, 3))
 
         add_ping(tx, ty, tz, myName, true)
 
         sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Marker sent via {FFFF00}/fb {FFFFFF}[Point: %d, %d, %d]", send_x, send_y, send_z)), -1)
-        sampSendChat(string.format("/fb TPING %d %d %d %s", send_x, send_y, send_z, random_letters))
+        sampSendChat(string.format("/fb %d %d %d", send_x, send_y, send_z))
 
         last_ping_time = current_time
     else
@@ -429,7 +418,8 @@ function sampev.onServerMessage(color, text)
         return
     end
 
-    local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:.*TPING%s+([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)%s+[%a]+")
+    -- Новый парсер: ловит (( x y z )) без TPING
+    local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:%s*%(%(%s*([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)%s*%)%)")
 
     if author and tx_str and ty_str and tz_str then
         if author ~= myName then
