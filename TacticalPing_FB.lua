@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.5"
+local SCRIPT_VERSION = "1.0.6"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -516,7 +516,6 @@ function main()
                         renderDrawBox(sx - (p_sz/2), sy - (p_sz/2), p_sz, p_sz, render_color)
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
 
-                        -- Текст из уже декодированных частей (без cp() в кадре)
                         local pin_mark = ping.pinned and " [PIN]" or ""
                         local author_str = STR_FROM .. " " .. ping.author .. pin_mark
                         local dist_str = string.format("[%.1f%s]", dist, STR_M)
@@ -541,7 +540,13 @@ function main()
 end
 
 function sampev.onServerMessage(color, text)
-    local clean_text = text:gsub("{.-}", "")
+    -- Убираем только корректные цветовые коды {XXXXXX}, не трогая остальное
+    local clean_text = text:gsub("{%x%x%x%x%x%x}", "")
+
+    -- Отладка (раскомментируй, если метки не появляются)
+    -- if clean_text:find("%(%(") then
+    --     sampAddChatMessage("{FFFF00}[DEBUG] " .. clean_text, -1)
+    -- end
 
     if clean_text:find("%[Ошибка%] Вы не состоите в группе!") then
         for i = #active_pings, 1, -1 do
@@ -555,7 +560,9 @@ function sampev.onServerMessage(color, text)
         return
     end
 
-    local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:%s*%(%(%s*([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)%s*%)%)")
+    -- Ищем ник[ID]: (( x y z ))
+    -- Поддерживает ранг и эмодзи перед ником: "[F] [🥵] Падре Theodore_Tredd[277]: (( 2770 -1616 10 ))"
+    local author, tx_str, ty_str, tz_str = clean_text:match("([%w_]+)%[%d+%]:%s*%(%(%s*([-]?%d+)%s+([-]?%d+)%s+([-]?%d+)")
 
     if author and tx_str and ty_str and tz_str then
         if author ~= myName then
