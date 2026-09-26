@@ -45,7 +45,6 @@ local function check_and_update(silent)
     update_state.status = "Проверка обновлений..."
 
     lua_thread.create(function()
-        -- 1. Качаем файл версии
         local tmp_ver = getWorkingDirectory() .. "\\tp_ver.tmp"
         if doesFileExist(tmp_ver) then os.remove(tmp_ver) end
 
@@ -83,7 +82,6 @@ local function check_and_update(silent)
             return
         end
 
-        -- 2. Есть новая — качаем скрипт
         update_state.downloading = true
         update_state.status = "Скачивание " .. remote_ver .. "..."
         sampAddChatMessage(string.format(
@@ -104,7 +102,6 @@ local function check_and_update(silent)
             return
         end
 
-        -- 3. Проверяем, что файл не пустой
         local uf = io.open(UPDATE_TMP, "r")
         local content = uf and uf:read("*a") or ""
         if uf then uf:close() end
@@ -116,7 +113,6 @@ local function check_and_update(silent)
             return
         end
 
-        -- 4. Перезаписываем текущий скрипт
         local this_file = thisScript().path
         local outf = io.open(this_file, "w")
         if outf then
@@ -183,7 +179,7 @@ imgui.OnInitialize(function()
 end)
 
 imgui.OnFrame(function() return menu_state[0] end, function(player)
-    imgui.SetNextWindowSize(imgui.ImVec2(420, 380), imgui.Cond.FirstUseEver)
+    imgui.SetNextWindowSize(imgui.ImVec2(420, 400), imgui.Cond.FirstUseEver)
     imgui.Begin(u8"Настройки Tactical Ping", menu_state, imgui.WindowFlags.NoCollapse)
 
     local changed = false
@@ -194,8 +190,8 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
     if imgui.SliderFloat(u8"Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
     if imgui.SliderFloat(u8"Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
     if imgui.SliderFloat(u8"Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
-    if imgui.Checkbox("Notifications for new pings", c_notifications) then changed = true end
-    if imgui.Checkbox("Notification sound", c_notification_sound) then changed = true end
+    if imgui.Checkbox(u8"Уведомления о новых метках", c_notifications) then changed = true end
+    if imgui.Checkbox(u8"Звук уведомления", c_notification_sound) then changed = true end
     imgui.PopItemWidth()
 
     if changed then
@@ -218,13 +214,11 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
     imgui.TextColored(imgui.ImVec4(0.8, 0.8, 0.8, 1.0), u8(update_state.status))
 
     if update_state.checking or update_state.downloading then
-        imgui.BeginDisabled()
-    end
-    if imgui.Button(u8"Проверить обновления", imgui.ImVec2(200, 0)) then
-        check_and_update(false)
-    end
-    if update_state.checking or update_state.downloading then
-        imgui.EndDisabled()
+        imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), u8"Подождите...")
+    else
+        if imgui.Button(u8"Проверить обновления", imgui.ImVec2(200, 0)) then
+            check_and_update(false)
+        end
     end
     -- ===== Конец блока автообновления =====
 
@@ -376,7 +370,6 @@ function main()
         clear_all_pings()
     end)
 
-    -- Автопроверка обновлений при старте (тихо)
     lua_thread.create(function()
         wait(5000)
         check_and_update(true)
