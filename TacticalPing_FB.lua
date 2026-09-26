@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.12"
+local SCRIPT_VERSION = "1.0.14"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -227,7 +227,7 @@ local function rebuild_font()
     ping_font = renderCreateFont(current_font_name, cfg.settings.font_size, current_font_flags)
 end
 
--- Отрисовка иконки метки в мире (без белого центра)
+-- Отрисовка иконки метки в мире
 local function draw_ping_icon(sx, sy, size, color)
     local half = size / 2
 
@@ -256,7 +256,7 @@ local function draw_ping_icon(sx, sy, size, color)
     end
 end
 
--- Стрелка-указатель у края экрана (залитая)
+-- Стрелка-указатель у края экрана
 local function draw_offscreen_arrow(px, py, pz)
     local resX, resY = getScreenResolution()
     local cx, cy = resX / 2, resY / 2
@@ -516,6 +516,10 @@ local function remove_pings_by_author(author)
         local ping = active_pings[i]
         if ping.author == author and not ping.pinned then
             if ping.blip then removeBlip(ping.blip) end
+            if ping.checkpoint then
+                deleteCheckpoint(ping.checkpoint)
+                ping.checkpoint = nil
+            end
             table.remove(active_pings, i)
         end
     end
@@ -531,8 +535,7 @@ local function add_ping(x, y, z, author, local_ping)
     end
 
     local blip = addSpriteBlipForCoord(x, y, z, 41)
-	currentCheckpoint = createCheckpoint(1, x, y, z, x, y, z, 5.0)
-	checkpointPos = {x = x, y = y, z = z}
+    local checkpoint = createCheckpoint(1, x, y, z, x, y, z, 5.0)
     changeBlipColour(blip, 2)
 
     local ping = {
@@ -540,6 +543,7 @@ local function add_ping(x, y, z, author, local_ping)
         time = os.clock(),
         author = author,
         blip = blip,
+        checkpoint = checkpoint,
         pinned = false
     }
     table.insert(active_pings, ping)
@@ -549,10 +553,15 @@ end
 
 function clear_all_pings()
     for i = #active_pings, 1, -1 do
-        if active_pings[i].blip then removeBlip(active_pings[i].blip) end
+        local ping = active_pings[i]
+        if ping.blip then removeBlip(ping.blip) end
+        if ping.checkpoint then
+            deleteCheckpoint(ping.checkpoint)
+            ping.checkpoint = nil
+        end
         table.remove(active_pings, i)
     end
-    sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Все метки очищены."), -1)
+    sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Все метки и чекпоинты очищены."), -1)
 end
 
 function toggle_last_ping_pin()
@@ -681,6 +690,10 @@ function main()
             local ping = active_pings[i]
             if not ping.pinned and os.clock() - ping.time > cfg.settings.ping_lifetime then
                 if ping.blip then removeBlip(ping.blip) end
+                if ping.checkpoint then
+                    deleteCheckpoint(ping.checkpoint)
+                    ping.checkpoint = nil
+                end
                 table.remove(active_pings, i)
             else
                 local on_screen = isPointOnScreen(ping.x, ping.y, ping.z, 0.0)
@@ -743,6 +756,10 @@ function sampev.onServerMessage(color, text)
         for i = #active_pings, 1, -1 do
             if active_pings[i].author == myName and (os.clock() - active_pings[i].time) < 3.0 then
                 if active_pings[i].blip then removeBlip(active_pings[i].blip) end
+                if active_pings[i].checkpoint then
+                    deleteCheckpoint(active_pings[i].checkpoint)
+                    active_pings[i].checkpoint = nil
+                end
                 table.remove(active_pings, i)
                 sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Отмена: Вы не состоите в группе!"), -1)
                 break
@@ -772,6 +789,7 @@ function onScriptTerminate(script, quitGame)
     if script == thisScript() then
         for i, ping in ipairs(active_pings) do
             if ping.blip then removeBlip(ping.blip) end
+            if ping.checkpoint then deleteCheckpoint(ping.checkpoint) end
         end
     end
 end
