@@ -15,7 +15,7 @@ local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
 -- ============ АВТООБНОВЛЕНИЕ ============
-local SCRIPT_VERSION = "1.0.4"
+local SCRIPT_VERSION = "1.0.5"
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
 local UPDATE_TMP = getWorkingDirectory() .. "\\TacticalPing_update.lua"
@@ -162,6 +162,11 @@ if not cfg.settings.font_flags then cfg.settings.font_flags = 5 end
 if type(cfg.settings.font_color) ~= "table" then cfg.settings.font_color = {1.0, 1.0, 1.0} end
 if not cfg.settings.alpha then cfg.settings.alpha = 1.0 end
 
+-- Кэш декодированных строк (один раз при загрузке)
+local STR_GOAL = cp("ЦЕЛЬ")
+local STR_FROM = cp("От:")
+local STR_M = cp("м")
+
 local font_list = {
     "Tahoma", "Arial", "Verdana", "Courier New",
     "Impact", "Comic Sans MS", "Times New Roman"
@@ -197,10 +202,6 @@ local current_font_flags = cfg.settings.font_flags
 local myName = "Unknown"
 
 local function rebuild_font()
-    if ping_font then
-        renderReleaseFont(ping_font)
-        ping_font = nil
-    end
     ping_font = renderCreateFont(current_font_name, cfg.settings.font_size, current_font_flags)
 end
 
@@ -225,7 +226,6 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
 
     local changed = false
 
-    -- ===== Основные =====
     if imgui.CollapsingHeader("Основные") then
         imgui.PushItemWidth(180)
         if imgui.ColorEdit3("Цвет метки", c_color) then changed = true end
@@ -236,14 +236,12 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
         imgui.PopItemWidth()
     end
 
-    -- ===== Текст метки =====
     if imgui.CollapsingHeader("Текст метки") then
         if imgui.Checkbox("Показывать дистанцию", c_show_distance) then changed = true end
         if imgui.Checkbox("Показывать имя автора", c_show_author) then changed = true end
 
         imgui.PushItemWidth(180)
 
-        -- Выбор шрифта
         if imgui.BeginCombo("Шрифт", current_font_name) then
             for _, name in ipairs(font_list) do
                 local selected = (name == current_font_name)
@@ -258,14 +256,12 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
             imgui.EndCombo()
         end
 
-        -- Размер шрифта
-        if imgui.SliderInt("Размер шрифта", c_font_size, 8, 20) then
+        if imgui.SliderInt("Размер шрифта", c_font_size, 8, 30) then
             cfg.settings.font_size = c_font_size[0]
             rebuild_font()
             changed = true
         end
 
-        -- Стиль шрифта
         local current_flag_name = "Обычный"
         for _, f in ipairs(font_flags_list) do
             if f.flag == current_font_flags then current_flag_name = f.name end
@@ -284,13 +280,11 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
             imgui.EndCombo()
         end
 
-        -- Цвет шрифта
         if imgui.ColorEdit3("Цвет текста", c_font_color) then
             cfg.settings.font_color = {c_font_color[0], c_font_color[1], c_font_color[2]}
             changed = true
         end
 
-        -- Прозрачность
         if imgui.SliderFloat("Прозрачность", c_alpha, 0.1, 1.0, "%.2f") then
             cfg.settings.alpha = c_alpha[0]
             changed = true
@@ -299,7 +293,6 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
         imgui.PopItemWidth()
     end
 
-    -- ===== Уведомления =====
     if imgui.CollapsingHeader("Уведомления") then
         if imgui.Checkbox("Уведомления о новых метках", c_notifications) then changed = true end
         if imgui.Checkbox("Звук уведомления", c_notification_sound) then changed = true end
@@ -318,7 +311,6 @@ imgui.OnFrame(function() return menu_state[0] end, function(player)
         inicfg.save(cfg, iniFileName)
     end
 
-    -- ===== Обновление =====
     if imgui.CollapsingHeader("Обновление") then
         imgui.Text("Версия: " .. SCRIPT_VERSION)
         if update_state.remote_version and update_state.remote_version ~= "" then
@@ -386,7 +378,13 @@ local function add_ping(x, y, z, author, local_ping)
     local blip = addSpriteBlipForCoord(x, y, z, 41)
     changeBlipColour(blip, 2)
 
-    local ping = {x = x, y = y, z = z, time = os.clock(), author = author, blip = blip, pinned = false}
+    local ping = {
+        x = x, y = y, z = z,
+        time = os.clock(),
+        author = author,
+        blip = blip,
+        pinned = false
+    }
     table.insert(active_pings, ping)
     if not local_ping then notify_ping(author, x, y, z) end
     return ping, true
@@ -518,19 +516,22 @@ function main()
                         renderDrawBox(sx - (p_sz/2), sy - (p_sz/2), p_sz, p_sz, render_color)
                         renderDrawBox(sx - (p_sz/4), sy - (p_sz/4), p_sz/2, p_sz/2, 0xFFFFFFFF)
 
-                        -- Формируем текст по настройкам
-                        local lines = {}
-                        if cfg.settings.show_distance then
-                            table.insert(lines, string.format("ЦЕЛЬ [%.1fм]", dist))
+                        -- Текст из уже декодированных частей (без cp() в кадре)
+                        local pin_mark = ping.pinned and " [PIN]" or ""
+                        local author_str = STR_FROM .. " " .. ping.author .. pin_mark
+                        local dist_str = string.format("[%.1f%s]", dist, STR_M)
+
+                        local text
+                        if cfg.settings.show_distance and cfg.settings.show_author then
+                            text = STR_GOAL .. " " .. dist_str .. "\n" .. author_str
+                        elseif cfg.settings.show_distance then
+                            text = STR_GOAL .. " " .. dist_str
+                        elseif cfg.settings.show_author then
+                            text = author_str
                         else
-                            table.insert(lines, "ЦЕЛЬ")
-                        end
-                        if cfg.settings.show_author then
-                            local pin_mark = ping.pinned and " [PIN]" or ""
-                            table.insert(lines, "От: " .. ping.author .. pin_mark)
+                            text = ""
                         end
 
-                        local text = cp(table.concat(lines, "\n"))
                         renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, get_dx_font_color())
                     end
                 end
@@ -573,7 +574,6 @@ end
 
 function onScriptTerminate(script, quitGame)
     if script == thisScript() then
-        if ping_font then renderReleaseFont(ping_font) end
         for i, ping in ipairs(active_pings) do
             if ping.blip then removeBlip(ping.blip) end
         end
