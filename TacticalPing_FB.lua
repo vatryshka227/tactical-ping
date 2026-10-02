@@ -14,13 +14,13 @@ encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
-local SCRIPT_VERSION = "1.1.0"
+local SCRIPT_VERSION = "1.3.0"
 
 -- ============ НАСТРОЙКИ ============
 local iniFileName = 'TacticalPing.ini'
 -- inicfg не умеет хранить таблицы, поэтому цвета лежат в отдельных ключах.
 -- Недостающие ключи inicfg.load подставляет из значений по умолчанию сам.
-local cfg = inicfg.load({
+local cfg_defaults = {
     settings = {
         cooldown = 5.0,
         ping_lifetime = 8.0,
@@ -47,9 +47,19 @@ local cfg = inicfg.load({
         author_colors = true,
         incoming_cooldown = 2.0,
         fb_color = 0,
-        auto_update = true
+        auto_update = true,
+        track_interval = 5.0
     }
-}, iniFileName)
+}
+local cfg = inicfg.load(cfg_defaults, iniFileName)
+
+-- Защита от битого или старого ini: недостающие значения и значения не того типа
+-- заменяются на значения по умолчанию, чтобы скрипт не падал при загрузке.
+if type(cfg) ~= "table" then cfg = {} end
+if type(cfg.settings) ~= "table" then cfg.settings = {} end
+for k, v in pairs(cfg_defaults.settings) do
+    if type(cfg.settings[k]) ~= type(v) then cfg.settings[k] = v end
+end
 inicfg.save(cfg, iniFileName)
 
 -- Строки, декодированные один раз при загрузке
@@ -103,6 +113,7 @@ local c_fade = imgui.new.float(S.fade_time)
 local c_author_colors = imgui.new.bool(S.author_colors)
 local c_incoming_cd = imgui.new.float(S.incoming_cooldown)
 local c_auto_update = imgui.new.bool(S.auto_update)
+local c_track_interval = imgui.new.float(S.track_interval)
 
 -- ============ СОСТОЯНИЕ ============
 local active_pings = {}
@@ -113,6 +124,8 @@ local save_at = nil
 local binding_key = false
 local bind_ready = 0
 local learning_color = false
+local tracking = false
+local last_track = 0
 local last_incoming = {}
 local author_cache = {}
 
@@ -219,6 +232,12 @@ local function check_and_update(silent)
            or not content:find("script_name", 1, true)
            or not content:find("function main", 1, true) then
             return fail("Ошибка: файл повреждён", "Скачанный файл повреждён или пуст.")
+        end
+
+        -- Файл должен компилироваться (loadstring только проверяет синтаксис, код не запускает)
+        local compiled = loadstring(content)
+        if not compiled then
+            return fail("Ошибка: в скачанном файле синтаксическая ошибка", "Скачанный файл не компилируется, обновление отменено.")
         end
 
         -- 4. Бэкап текущей версии и замена
@@ -333,6 +352,16 @@ end
 local function start_learning()
     learning_color = true
     sampAddChatMessage(cp("{FFAA00}[Tactical Ping] {FFFFFF}Ждём групповую метку. Поставьте метку через /fb или попросите союзника - цвет сообщения запомнится."), -1)
+end
+
+local function set_tracking(on)
+    tracking = on
+    last_track = 0 -- первая метка уходит сразу
+    if on then
+        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Слежение включено: метка на вас каждые {FFFF00}%.1f{FFFFFF} сек. Выключить: {FFFF00}/ptrack", S.track_interval)), -1)
+    else
+        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Слежение выключено."), -1)
+    end
 end
 
 -- ============ ОТРИСОВКА ============
@@ -482,6 +511,30 @@ imgui.OnFrame(function() return menu_state[0] end, function()
         end
     end
 
+    if imgui.CollapsingHeader("Авто-метка на себя") then
+        local status = tracking and "ВКЛЮЧЕНО" or "ВЫКЛЮЧЕНО"
+        local col = tracking and imgui.ImVec4(0.3, 1.0, 0.3, 1.0) or imgui.ImVec4(1.0, 0.7, 0.2, 1.0)
+        imgui.TextColored(col, "Состояние: " .. status)
+        imgui.PushItemWidth(180)
+        if imgui.SliderFloat("Интервал (сек)", c_track_interval, 0.5, 15.0, "%.1f") then
+            S.track_interval = c_track_interval[0]
+            if S.track_interval < 0.5 then S.track_interval = 0.5 end
+            changed = true
+        end
+        imgui.PopItemWidth()
+        imgui.Text("/ping — включить/выключить авто-метки")
+        imgui.Text("/pmark — поставить обычную метку по прицелу")
+        if tracking then
+            if imgui.Button("Выключить авто-метки", imgui.ImVec2(220, 0)) then
+                set_tracking(false)
+            end
+        else
+            if imgui.Button("Включить авто-метки", imgui.ImVec2(220, 0)) then
+                set_tracking(true)
+            end
+        end
+    end
+
     if imgui.CollapsingHeader("Текст метки") then
         if imgui.Checkbox("Показывать дистанцию", c_show_distance) then changed = true end
         if imgui.Checkbox("Показывать имя автора", c_show_author) then changed = true end
@@ -611,6 +664,7 @@ imgui.OnFrame(function() return menu_state[0] end, function()
         S.author_colors = c_author_colors[0]
         S.incoming_cooldown = c_incoming_cd[0]
         S.auto_update = c_auto_update[0]
+        S.track_interval = math.max(c_track_interval[0], 0.5)
         schedule_save()
     end
 
@@ -715,7 +769,7 @@ local function toggle_last_ping_pin()
 end
 
 -- ============ ОТПРАВКА МЕТКИ ============
-local function send_ping_at(tx, ty, tz)
+local function send_ping_at(tx, ty, tz, silent)
     -- Округляем, а не отбрасываем дробную часть, чтобы метка у союзников не уезжала вниз
     local send_x = math.floor(tx + 0.5)
     local send_y = math.floor(ty + 0.5)
@@ -723,7 +777,9 @@ local function send_ping_at(tx, ty, tz)
 
     add_ping(tx, ty, tz, get_my_name(), true)
 
-    sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Метка отправлена через {FFFF00}/fb {FFFFFF}[Точка: %d, %d, %d]", send_x, send_y, send_z)), -1)
+    if not silent then
+        sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Метка отправлена через {FFFF00}/fb {FFFFFF}[Точка: %d, %d, %d]", send_x, send_y, send_z)), -1)
+    end
     sampSendChat(string.format("/fb %d %d %d", send_x, send_y, send_z))
 end
 
@@ -780,9 +836,12 @@ function main()
     math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 
     sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
-    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear {FFFFFF}| На себя: {FFFF00}/pself {FFFFFF}| Фильтр цвета: {FFFF00}/pcolor"), -1)
+    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}/ping — авто-метки на себя | /pmark — метка по прицелу | /pmenu — меню | /pself — разовая метка на себя"), -1)
 
-    sampRegisterChatCommand('ping', place_ping_marker)
+    -- /ping теперь переключает автоматические метки на текущую позицию игрока.
+    -- Обычная метка по прицелу вынесена в /pmark.
+    sampRegisterChatCommand('ping', function() set_tracking(not tracking) end)
+    sampRegisterChatCommand('pmark', place_ping_marker)
     sampRegisterChatCommand('pself', place_self_ping)
     sampRegisterChatCommand('pmenu', function() menu_state[0] = not menu_state[0] end)
     sampRegisterChatCommand('ppin', toggle_last_ping_pin)
@@ -808,6 +867,18 @@ function main()
 
         if font_rebuild_at and os.clock() >= font_rebuild_at then rebuild_font() end
         if save_at and os.clock() >= save_at then save_cfg() end
+
+        -- Автоматически отправляем метку с текущими координатами игрока.
+        -- Не используем cooldown: интервал авто-меток настраивается отдельно.
+        if tracking and not sampIsChatInputActive() and not sampIsDialogActive() and not isPauseMenuActive() then
+            local now_track = os.clock()
+            local interval = math.max(tonumber(S.track_interval) or 1.0, 0.5)
+            if last_track == 0 or now_track - last_track >= interval then
+                local px2, py2, pz2 = getCharCoordinates(PLAYER_PED)
+                send_ping_at(px2, py2, pz2, true)
+                last_track = now_track
+            end
+        end
 
         -- Назначение клавиши
         if binding_key then
@@ -925,7 +996,7 @@ function sampev.onServerMessage(color, text)
     -- Используем присланную высоту; землю берём только если высота не передана
     if tz == 0 then
         local ground = getGroundZFor3dCoord(tx, ty, 300.0)
-        if ground and ground ~= 0 then tz = ground end
+        if type(ground) == "number" and ground ~= 0 then tz = ground end
     end
 
     add_ping(tx, ty, tz, author, false)
