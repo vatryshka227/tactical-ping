@@ -14,7 +14,7 @@ encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
-local SCRIPT_VERSION = "1.3.0"
+local SCRIPT_VERSION = "1.5.3"
 
 -- ============ НАСТРОЙКИ ============
 local iniFileName = 'TacticalPing.ini'
@@ -26,7 +26,7 @@ local cfg_defaults = {
         ping_lifetime = 8.0,
         render_dist = 700.0,
         ping_size = 8,
-        ping_r = 0.2, ping_g = 1.0, ping_b = 0.2,
+        ping_r = 0.30, ping_g = 0.90, ping_b = 0.60,
         notifications = true,
         notification_sound = true,
         dedupe_radius = 12.0,
@@ -38,7 +38,7 @@ local cfg_defaults = {
         font_flags = 5,
         font_r = 1.0, font_g = 1.0, font_b = 1.0,
         alpha = 1.0,
-        icon_type = 0,
+        icon_type = 4,
         offscreen_arrows = true,
         offscreen_margin = 60,
         offscreen_size = 18,
@@ -48,7 +48,12 @@ local cfg_defaults = {
         incoming_cooldown = 2.0,
         fb_color = 0,
         auto_update = true,
-        track_interval = 5.0
+        track_interval = 5.0,
+        track_move_threshold = 12.0,
+        track_min_interval = 2.0,
+        track_mode = 2,
+        icon_v2 = false,
+        look_version = 0
     }
 }
 local cfg = inicfg.load(cfg_defaults, iniFileName)
@@ -66,6 +71,7 @@ inicfg.save(cfg, iniFileName)
 local STR_GOAL = cp("ЦЕЛЬ")
 local STR_FROM = cp("От:")
 local STR_M = cp("м")
+local STR_KM = cp("км")
 local STR_LEFT = cp("ост.")
 local STR_NOGROUP = cp("%[Ошибка%] Вы не состоите в группе!")
 
@@ -87,11 +93,29 @@ local icon_list = {
     {name = "Квадрат", id = 0},
     {name = "Треугольник", id = 1},
     {name = "Ромб", id = 2},
-    {name = "Крест", id = 3}
+    {name = "Крест", id = 3},
+    {name = "Кольцо (рекомендуется)", id = 4}
 }
 
 -- ============ ПЕРЕМЕННЫЕ imgui ============
 local S = cfg.settings
+if S.track_interval < 2.0 then S.track_interval = 2.0 end
+-- Один раз переключаем иконку на новое «Кольцо» (старые иконки остаются в меню)
+if not S.icon_v2 then
+    S.icon_type = 4
+    S.icon_v2 = true
+    inicfg.save(cfg, iniFileName)
+end
+-- Один раз заменяем старый ядовито-зелёный цвет метки по умолчанию на более мягкий.
+-- Если цвет был изменён вручную, он остаётся как есть.
+if S.look_version < 2 then
+    if math.abs(S.ping_r - 0.2) < 0.01 and math.abs(S.ping_g - 1.0) < 0.01 and math.abs(S.ping_b - 0.2) < 0.01 then
+        S.ping_r, S.ping_g, S.ping_b = 0.30, 0.90, 0.60
+    end
+    S.look_version = 2
+    inicfg.save(cfg, iniFileName)
+end
+if S.track_mode ~= 0 and S.track_mode ~= 1 and S.track_mode ~= 2 then S.track_mode = 2 end
 local menu_state = imgui.new.bool(false)
 local c_cooldown = imgui.new.float(S.cooldown)
 local c_lifetime = imgui.new.float(S.ping_lifetime)
@@ -114,11 +138,13 @@ local c_author_colors = imgui.new.bool(S.author_colors)
 local c_incoming_cd = imgui.new.float(S.incoming_cooldown)
 local c_auto_update = imgui.new.bool(S.auto_update)
 local c_track_interval = imgui.new.float(S.track_interval)
+local c_track_move_threshold = imgui.new.float(S.track_move_threshold)
 
 -- ============ СОСТОЯНИЕ ============
 local active_pings = {}
 local last_ping_time = 0
 local ping_font = nil
+local ping_font_small = nil
 local font_rebuild_at = nil
 local save_at = nil
 local binding_key = false
@@ -126,6 +152,7 @@ local bind_ready = 0
 local learning_color = false
 local tracking = false
 local last_track = 0
+local last_track_x, last_track_y, last_track_z = nil, nil, nil
 local last_incoming = {}
 local author_cache = {}
 
@@ -276,9 +303,11 @@ end
 
 local function rebuild_font()
     font_rebuild_at = nil
-    local old = ping_font
+    local old, old_small = ping_font, ping_font_small
     ping_font = renderCreateFont(S.font_name, S.font_size, S.font_flags)
+    ping_font_small = renderCreateFont(S.font_name, math.max(8, S.font_size - 2), S.font_flags)
     if old then renderReleaseFont(old) end
+    if old_small then renderReleaseFont(old_small) end
 end
 
 local function request_font_rebuild()
@@ -322,7 +351,7 @@ local function author_rgb(name)
     if not c then
         local h = 0
         for i = 1, #name do h = (h * 31 + name:byte(i)) % 360 end
-        local r, g, b = hsv2rgb(h / 360, 0.75, 1.0)
+        local r, g, b = hsv2rgb(h / 360, 0.55, 0.95)
         c = {r, g, b}
         author_cache[name] = c
     end
@@ -357,14 +386,48 @@ end
 local function set_tracking(on)
     tracking = on
     last_track = 0 -- первая метка уходит сразу
+    last_track_x, last_track_y, last_track_z = nil, nil, nil
     if on then
-        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Слежение включено: метка на вас каждые {FFFF00}%.1f{FFFFFF} сек. Выключить: {FFFF00}/ptrack", S.track_interval)), -1)
+        local how
+        if S.track_mode == 0 then
+            how = string.format("каждые {FFFF00}%.1f{FFFFFF} сек.", S.track_interval)
+        elseif S.track_mode == 1 then
+            how = string.format("при перемещении на {FFFF00}%.1f м{FFFFFF}", S.track_move_threshold)
+        else
+            how = string.format("каждые {FFFF00}%.1f{FFFFFF} сек. или при перемещении на {FFFF00}%.1f м{FFFFFF}", S.track_interval, S.track_move_threshold)
+        end
+        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Слежение включено: " .. how .. ". Выключить: {FFFF00}/ptrack"), -1)
     else
         sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Слежение выключено."), -1)
     end
 end
 
 -- ============ ОТРИСОВКА ============
+local function clamp(v, lo, hi)
+    if v < lo then return lo elseif v > hi then return hi end
+    return v
+end
+
+-- Проекция точки на экран без ограничения дальностью прорисовки игры.
+-- isPointOnScreen считает точки за дальней плоскостью камеры невидимыми, поэтому далёкие метки
+-- пропадали. Любая точка на луче из камеры проецируется в один и тот же пиксель, поэтому
+-- дальнюю точку подтягиваем ближе по лучу. Третье значение: точка впереди камеры.
+local FAR_PROJECT = 200.0
+local function project_point(x, y, z)
+    local camx, camy, camz = getActiveCameraCoordinates()
+    local lx, ly, lz = getActiveCameraPointAt()
+    local vx, vy, vz = x - camx, y - camy, z - camz
+    local dot = vx * (lx - camx) + vy * (ly - camy) + vz * (lz - camz)
+    local len = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if len > FAR_PROJECT then
+        local k = FAR_PROJECT / len
+        vx, vy, vz = vx * k, vy * k, vz * k
+    end
+    local sx, sy = convert3DCoordsToScreen(camx + vx, camy + vy, camz + vz)
+    return sx, sy, dot > 0
+end
+
+-- Старые простые иконки (квадрат, треугольник, ромб, крест)
 local function draw_ping_icon(sx, sy, size, color)
     local half = size / 2
     local icon = S.icon_type
@@ -390,21 +453,190 @@ local function draw_ping_icon(sx, sy, size, color)
     end
 end
 
--- Стрелка у края экрана (направление считается от центра, метки за спиной учитываются)
-local function draw_offscreen_arrow(ping, color)
+-- Дуга (fraction = 1 даёт целое кольцо). Начинается сверху, идёт по часовой стрелке.
+local function draw_arc(cx, cy, radius, fraction, segments, width, color)
+    if fraction <= 0 then return end
+    if fraction > 1 then fraction = 1 end
+    local n = math.max(1, math.floor(segments * fraction + 0.5))
+    local total = 2 * math.pi * fraction
+    local start = -math.pi / 2
+    local px, py = cx + math.cos(start) * radius, cy + math.sin(start) * radius
+    for i = 1, n do
+        local a = start + total * i / n
+        local x, y = cx + math.cos(a) * radius, cy + math.sin(a) * radius
+        renderDrawLine(px, py, x, y, width, color)
+        px, py = x, y
+    end
+end
+
+-- Круглая точка (горизонтальными полосками)
+local function draw_disc(cx, cy, radius, color)
+    local r = math.max(1, math.floor(radius))
+    for dy = -r, r do
+        local w = math.sqrt(r * r - dy * dy) * 2
+        renderDrawBox(cx - w / 2, cy + dy, math.max(1, w), 1, color)
+    end
+end
+
+-- Указатель-треугольник вершиной вниз; tip_y - нижняя точка
+local function draw_down_pointer(cx, tip_y, width, height, color)
+    for i = 0, height - 1 do
+        local w = width * (1 - i / height)
+        renderDrawBox(cx - w / 2, tip_y - height + i, math.max(1, w), 1, color)
+    end
+end
+
+-- Метка-кольцо: одно тонкое кольцо (оно же индикатор времени жизни), точка в центре,
+-- небольшой указатель сверху. Возвращает внешний радиус для расположения текста.
+local function draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
+    local born_age = now - ping.born
+
+    -- появление: метка «садится» с увеличенного размера и проявляется
+    local spawn_scale, spawn_alpha = 1.0, 1.0
+    if born_age < 0.35 then
+        local u = born_age / 0.35
+        local e = 1 - (1 - u) * (1 - u) * (1 - u)
+        spawn_scale = 1.7 - 0.7 * e
+        spawn_alpha = e
+    end
+
+    -- дальние метки меньше, близкие больше (с ограничением)
+    local dist_scale = clamp(1.25 - dist / 400, 0.65, 1.25)
+    local R0 = S.ping_size * 1.2 * dist_scale
+    local pulse = 1 + 0.04 * math.sin(now * 4)
+    local R = R0 * spawn_scale * pulse
+    local a = alpha * spawn_alpha
+    local seg = clamp(math.floor(R * 2.6), 24, 64) -- больше сегментов - круг без «углов»
+
+    local col = pack_color(r, g, b, a)
+    local dark = pack_color(0, 0, 0, a * 0.45)
+
+    -- тонкая волна при появлении
+    if born_age < 0.6 then
+        local u = born_age / 0.6
+        draw_arc(sx, sy, R0 * (1 + 1.5 * u), 1, seg, 1, pack_color(r, g, b, alpha * (1 - u) * 0.45))
+    end
+
+    -- тонкий тёмный контур по краям кольца: читается на любом фоне, но без толстой чёрной полосы
+    draw_arc(sx, sy, R + 1.6, 1, seg, 1, dark)
+    draw_arc(sx, sy, R - 1.6, 1, seg, 1, dark)
+
+    -- само кольцо: бледная подложка + яркая дуга оставшегося времени (закреплённая метка - целое кольцо)
+    if S.show_lifetime and not ping.pinned then
+        draw_arc(sx, sy, R, 1, seg, 2, pack_color(r, g, b, a * 0.28))
+        draw_arc(sx, sy, R, clamp(left / S.ping_lifetime, 0, 1), seg, 2, col)
+    else
+        draw_arc(sx, sy, R, 1, seg, 2, col)
+    end
+
+    -- точка в центре
+    local dot = math.max(2, R0 * 0.16)
+    draw_disc(sx, sy, dot + 1, dark)
+    draw_disc(sx, sy, dot, col)
+
+    -- небольшой указатель над кольцом
+    local ph = math.max(4, R0 * 0.5)
+    local pw = R0 * 0.75
+    draw_down_pointer(sx, sy - R - 4, pw, ph, col)
+
+    return R0 + 3
+end
+
+-- Подпись: лёгкая плашка с тонкой цветной полоской, дистанция крупно белым, ник мельче и спокойнее
+local function draw_ping_label(x, y, ping, dist, r, g, b, alpha)
+    local big, small = ping_font, ping_font_small
+    if not big or not small then return end
+
+    local line1
+    if S.show_distance then
+        if dist >= 1000 then
+            line1 = string.format("%.1f %s", dist / 1000, STR_KM)
+        else
+            line1 = string.format("%d %s", math.floor(dist + 0.5), STR_M)
+        end
+    else
+        line1 = STR_GOAL
+    end
+    local line2 = S.show_author and ping.author or nil
+
+    local w1 = renderGetFontDrawTextLength(big, line1)
+    local h1 = renderGetFontDrawHeight(big)
+    local w2, h2 = 0, 0
+    if line2 then
+        w2 = renderGetFontDrawTextLength(small, line2)
+        h2 = renderGetFontDrawHeight(small)
+    end
+
+    local pad = 5
+    local w = math.max(w1, w2) + pad * 2 + 2
+    local h = h1 + h2 + pad * 2 - 2
+    local top = y - h / 2
+
+    -- плашка со скруглёнными углами (два перекрывающихся прямоугольника)
+    local bg = pack_color(0, 0, 0, alpha * 0.38)
+    renderDrawBox(x + 1, top, w - 2, h, bg)
+    renderDrawBox(x, top + 1, w, h - 2, bg)
+    renderDrawBox(x, top + 1, 2, h - 2, pack_color(r, g, b, alpha * 0.9))
+
+    local tx = x + pad + 2
+    local ty = top + pad - 1
+    local shadow = pack_color(0, 0, 0, alpha * 0.8)
+
+    renderFontDrawText(big, line1, tx + 1, ty + 1, shadow)
+    renderFontDrawText(big, line1, tx, ty, pack_color(S.font_r, S.font_g, S.font_b, alpha))
+
+    if line2 then
+        local ty2 = ty + h1 - 1
+        renderFontDrawText(small, line2, tx + 1, ty2 + 1, shadow)
+        renderFontDrawText(small, line2, tx, ty2, pack_color(0.80, 0.82, 0.85, alpha * 0.9))
+    end
+
+    if ping.pinned then
+        local pcx, pcy = x + w + 8, top + h / 2 - 3
+        local pc = pack_color(r, g, b, alpha)
+        draw_disc(pcx, pcy, 3, pc)
+        renderDrawLine(pcx, pcy + 3, pcx - 2, pcy + 10, 2, pc)
+    end
+end
+
+-- Треугольник-стрелка заданного размера: заливка линиями или только контур
+local function draw_arrow_tri(ax, ay, dx, dy, sz, color, steps, width, outline_only)
+    local tip_len = sz * 0.7
+    local base_half = sz * 0.6
+    local perp_x, perp_y = -dy, dx
+
+    local tip_x, tip_y = ax + dx * tip_len, ay + dy * tip_len
+    local bx, by = ax - dx * tip_len * 0.5, ay - dy * tip_len * 0.5
+    local b1x, b1y = bx + perp_x * base_half, by + perp_y * base_half
+    local b2x, b2y = bx - perp_x * base_half, by - perp_y * base_half
+
+    if outline_only then
+        renderDrawLine(tip_x, tip_y, b1x, b1y, width, color)
+        renderDrawLine(tip_x, tip_y, b2x, b2y, width, color)
+        renderDrawLine(b1x, b1y, b2x, b2y, width, color)
+        return
+    end
+
+    for k = 0, steps do
+        local f = k / steps
+        renderDrawLine(tip_x, tip_y, b1x + (b2x - b1x) * f, b1y + (b2y - b1y) * f, width, color)
+    end
+    renderDrawLine(b1x, b1y, b2x, b2y, width, color)
+end
+
+-- Стрелка у края экрана: мягкое свечение, тёмный контур, цвет автора, лёгкая пульсация
+-- (направление считается от центра, метки за спиной учитываются)
+local function draw_offscreen_arrow(ping, r, g, b, alpha)
     local resX, resY = getScreenResolution()
     local cx, cy = resX / 2, resY / 2
 
-    local sx, sy = convert3DCoordsToScreen(ping.x, ping.y, ping.z)
+    local sx, sy, in_front = project_point(ping.x, ping.y, ping.z)
     if not sx or not sy then return end
 
     local dx, dy = sx - cx, sy - cy
 
     -- Для точек позади камеры экранные координаты зеркальны - разворачиваем направление
-    local camx, camy, camz = getActiveCameraCoordinates()
-    local lx, ly, lz = getActiveCameraPointAt()
-    local dot = (ping.x - camx) * (lx - camx) + (ping.y - camy) * (ly - camy) + (ping.z - camz) * (lz - camz)
-    if dot < 0 then dx, dy = -dx, -dy end
+    if not in_front then dx, dy = -dx, -dy end
 
     local len = math.sqrt(dx * dx + dy * dy)
     if len < 0.001 then
@@ -420,23 +652,11 @@ local function draw_offscreen_arrow(ping, color)
     local t = math.min(tx, ty)
     local ax, ay = cx + dx * t, cy + dy * t
 
-    local size = S.offscreen_size
-    local tip_len = size * 0.7
-    local base_half = size * 0.6
-    local perp_x, perp_y = -dy, dx
+    local size = S.offscreen_size * (1 + 0.08 * math.sin(os.clock() * 5))
 
-    local tip_x, tip_y = ax + dx * tip_len, ay + dy * tip_len
-    local bx, by = ax - dx * tip_len * 0.5, ay - dy * tip_len * 0.5
-    local b1x, b1y = bx + perp_x * base_half, by + perp_y * base_half
-    local b2x, b2y = bx - perp_x * base_half, by - perp_y * base_half
-
-    -- Заливка треугольника линиями от вершины к основанию (мало вызовов отрисовки)
-    local steps = 6
-    for k = 0, steps do
-        local f = k / steps
-        renderDrawLine(tip_x, tip_y, b1x + (b2x - b1x) * f, b1y + (b2y - b1y) * f, 2, color)
-    end
-    renderDrawLine(b1x, b1y, b2x, b2y, 2, color)
+    draw_arrow_tri(ax, ay, dx, dy, size * 1.5, pack_color(r, g, b, alpha * 0.22), 8, 4, false)  -- свечение
+    draw_arrow_tri(ax, ay, dx, dy, size * 1.12, pack_color(0, 0, 0, alpha * 0.7), 0, 4, true)   -- тёмный контур
+    draw_arrow_tri(ax, ay, dx, dy, size, pack_color(r, g, b, alpha), 8, 3, false)               -- заливка
 end
 
 -- ============ МЕНЮ ============
@@ -480,7 +700,7 @@ imgui.OnFrame(function() return menu_state[0] end, function()
         if imgui.SliderFloat("Задержка (сек)", c_cooldown, 1.0, 15.0, "%.1f") then changed = true end
         if imgui.SliderFloat("Время жизни (сек)", c_lifetime, 3.0, 30.0, "%.1f") then changed = true end
         if imgui.SliderFloat("Затухание (сек)", c_fade, 0.0, 3.0, "%.1f") then changed = true end
-        if imgui.SliderFloat("Дальность (м)", c_render_dist, 100.0, 2000.0, "%.0f") then changed = true end
+        if imgui.SliderFloat("Дальность (м)", c_render_dist, 100.0, 5000.0, "%.0f") then changed = true end
 
         local current_icon_name = "Квадрат"
         for _, icon in ipairs(icon_list) do
@@ -512,27 +732,51 @@ imgui.OnFrame(function() return menu_state[0] end, function()
     end
 
     if imgui.CollapsingHeader("Авто-метка на себя") then
-        local status = tracking and "ВКЛЮЧЕНО" or "ВЫКЛЮЧЕНО"
-        local col = tracking and imgui.ImVec4(0.3, 1.0, 0.3, 1.0) or imgui.ImVec4(1.0, 0.7, 0.2, 1.0)
-        imgui.TextColored(col, "Состояние: " .. status)
-        imgui.PushItemWidth(180)
-        if imgui.SliderFloat("Интервал (сек)", c_track_interval, 0.5, 15.0, "%.1f") then
-            S.track_interval = c_track_interval[0]
-            if S.track_interval < 0.5 then S.track_interval = 0.5 end
-            changed = true
+        local mode_names = {"По секундам", "По метрам", "По секундам и метрам"}
+        imgui.PushItemWidth(220)
+        if imgui.BeginCombo("Режим обновления", mode_names[S.track_mode + 1] or mode_names[3]) then
+            for i, name in ipairs(mode_names) do
+                local selected = (S.track_mode == i - 1)
+                if imgui.Selectable(name, selected) then
+                    S.track_mode = i - 1
+                    changed = true
+                end
+                if selected then imgui.SetItemDefaultFocus() end
+            end
+            imgui.EndCombo()
+        end
+
+        if S.track_mode ~= 1 then
+            if imgui.SliderFloat("Интервал (сек)", c_track_interval, 2.0, 30.0, "%.1f") then changed = true end
+        end
+        if S.track_mode ~= 0 then
+            if imgui.SliderFloat("Расстояние (м)", c_track_move_threshold, 1.0, 50.0, "%.1f") then changed = true end
         end
         imgui.PopItemWidth()
-        imgui.Text("/ping — включить/выключить авто-метки")
-        imgui.Text("/pmark — поставить обычную метку по прицелу")
+
+        imgui.Text("Текущий статус:")
         if tracking then
-            if imgui.Button("Выключить авто-метки", imgui.ImVec2(220, 0)) then
+            imgui.SameLine()
+            imgui.TextColored(imgui.ImVec4(0.2, 1.0, 0.5, 1.0), "ВКЛ")
+            if imgui.Button("Выключить авто-метку", imgui.ImVec2(200, 0)) then
                 set_tracking(false)
             end
         else
-            if imgui.Button("Включить авто-метки", imgui.ImVec2(220, 0)) then
+            imgui.SameLine()
+            imgui.TextColored(imgui.ImVec4(1.0, 0.5, 0.2, 1.0), "ВЫКЛ")
+            if imgui.Button("Включить авто-метку", imgui.ImVec2(200, 0)) then
                 set_tracking(true)
             end
         end
+
+        if S.track_mode == 0 then
+            imgui.TextWrapped("Метка отправляется каждые N секунд, стоите вы или двигаетесь.")
+        elseif S.track_mode == 1 then
+            imgui.TextWrapped("Метка отправляется, когда вы отошли от последней отправленной точки на N метров. На месте метка не обновляется.")
+        else
+            imgui.TextWrapped("Метка отправляется по таймеру, а при перемещении дальше заданного расстояния - сразу.")
+        end
+        imgui.TextWrapped("Чаще раза в 2 секунды метки не отправляются (защита от флуда).")
     end
 
     if imgui.CollapsingHeader("Текст метки") then
@@ -664,7 +908,8 @@ imgui.OnFrame(function() return menu_state[0] end, function()
         S.author_colors = c_author_colors[0]
         S.incoming_cooldown = c_incoming_cd[0]
         S.auto_update = c_auto_update[0]
-        S.track_interval = math.max(c_track_interval[0], 0.5)
+        S.track_interval = math.max(2.0, c_track_interval[0])
+        S.track_move_threshold = math.max(1.0, c_track_move_threshold[0])
         schedule_save()
     end
 
@@ -735,6 +980,7 @@ local function add_ping(x, y, z, author, local_ping)
     local ping = {
         x = x, y = y, z = z,
         time = os.clock(),
+        born = os.clock(),
         author = author,
         own = local_ping and true or false,
         blip = blip,
@@ -775,9 +1021,9 @@ local function send_ping_at(tx, ty, tz, silent)
     local send_y = math.floor(ty + 0.5)
     local send_z = math.floor(tz + 0.5)
 
-    add_ping(tx, ty, tz, get_my_name(), true)
-
+    -- Авто-метки не рисуем у себя: иначе под вами каждые пару секунд создаются чекпоинт и блип
     if not silent then
+        add_ping(tx, ty, tz, get_my_name(), true)
         sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Метка отправлена через {FFFF00}/fb {FFFFFF}[Точка: %d, %d, %d]", send_x, send_y, send_z)), -1)
     end
     sampSendChat(string.format("/fb %d %d %d", send_x, send_y, send_z))
@@ -827,6 +1073,51 @@ local function place_self_ping()
     last_ping_time = os.clock()
 end
 
+-- ============ АВТО-СЛЕЖЕНИЕ ============
+local TRACK_MIN_INTERVAL = 2.0 -- не чаще, чем раз в 2 сек: быстрее у получателей всё равно отсекается антиспамом
+
+local function tracking_ping(px, py, pz)
+    local now = os.clock()
+    local min_interval = math.max(TRACK_MIN_INTERVAL, tonumber(S.track_min_interval) or TRACK_MIN_INTERVAL)
+    if now - last_track < min_interval then return false end
+
+    send_ping_at(px, py, pz, true)
+    last_track = now
+    last_track_x, last_track_y, last_track_z = px, py, pz
+    return true
+end
+
+local function tracking_update(px, py, pz)
+    if not tracking then return end
+    if not sampIsLocalPlayerSpawned() or isCharDead(PLAYER_PED) then return end
+
+    local mode = tonumber(S.track_mode) or 2 -- 0 - секунды, 1 - метры, 2 - оба
+    local fire = false
+
+    if last_track_x == nil then
+        fire = true
+    else
+        local interval = math.max(TRACK_MIN_INTERVAL, tonumber(S.track_interval) or 5.0)
+        local interval_ready = (os.clock() - last_track) >= interval
+
+        local dx = px - last_track_x
+        local dy = py - last_track_y
+        local dz = pz - last_track_z
+        local threshold = math.max(1.0, tonumber(S.track_move_threshold) or 12.0)
+        local moved = (dx * dx + dy * dy + dz * dz) >= threshold * threshold
+
+        if mode == 0 then
+            fire = interval_ready
+        elseif mode == 1 then
+            fire = moved
+        else
+            fire = moved or interval_ready
+        end
+    end
+
+    if fire then tracking_ping(px, py, pz) end
+end
+
 -- ============ ГЛАВНЫЙ ЦИКЛ ============
 function main()
     if not isSampLoaded() or not isSampfuncsLoaded() then return end
@@ -836,13 +1127,11 @@ function main()
     math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 
     sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
-    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}/ping — авто-метки на себя | /pmark — метка по прицелу | /pmenu — меню | /pself — разовая метка на себя"), -1)
+    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear {FFFFFF}| На себя: {FFFF00}/pself {FFFFFF}| Авто-метка: {FFFF00}/ptrack {FFFFFF}| Фильтр цвета: {FFFF00}/pcolor"), -1)
 
-    -- /ping теперь переключает автоматические метки на текущую позицию игрока.
-    -- Обычная метка по прицелу вынесена в /pmark.
-    sampRegisterChatCommand('ping', function() set_tracking(not tracking) end)
-    sampRegisterChatCommand('pmark', place_ping_marker)
+    sampRegisterChatCommand('ping', place_ping_marker)
     sampRegisterChatCommand('pself', place_self_ping)
+    sampRegisterChatCommand('ptrack', function() set_tracking(not tracking) end)
     sampRegisterChatCommand('pmenu', function() menu_state[0] = not menu_state[0] end)
     sampRegisterChatCommand('ppin', toggle_last_ping_pin)
     sampRegisterChatCommand('pclear', clear_all_pings)
@@ -867,18 +1156,6 @@ function main()
 
         if font_rebuild_at and os.clock() >= font_rebuild_at then rebuild_font() end
         if save_at and os.clock() >= save_at then save_cfg() end
-
-        -- Автоматически отправляем метку с текущими координатами игрока.
-        -- Не используем cooldown: интервал авто-меток настраивается отдельно.
-        if tracking and not sampIsChatInputActive() and not sampIsDialogActive() and not isPauseMenuActive() then
-            local now_track = os.clock()
-            local interval = math.max(tonumber(S.track_interval) or 1.0, 0.5)
-            if last_track == 0 or now_track - last_track >= interval then
-                local px2, py2, pz2 = getCharCoordinates(PLAYER_PED)
-                send_ping_at(px2, py2, pz2, true)
-                last_track = now_track
-            end
-        end
 
         -- Назначение клавиши
         if binding_key then
@@ -905,6 +1182,11 @@ function main()
         local now = os.clock()
         local px, py, pz = getCharCoordinates(PLAYER_PED)
 
+        -- Авто-метка: отправляем по интервалу или сразу после перемещения дальше порога.
+        tracking_update(px, py, pz)
+
+        local resX, resY = getScreenResolution()
+
         for i = #active_pings, 1, -1 do
             local ping = active_pings[i]
             local age = now - ping.time
@@ -919,33 +1201,26 @@ function main()
                 end
 
                 local r, g, b = get_ping_rgb(ping)
-                local color = pack_color(r, g, b, alpha)
 
-                if isPointOnScreen(ping.x, ping.y, ping.z, 0.0) then
-                    local sx, sy = convert3DCoordsToScreen(ping.x, ping.y, ping.z)
+                local sx, sy, in_front = project_point(ping.x, ping.y, ping.z)
+                if in_front and sx and sy and sx >= 0 and sy >= 0 and sx <= resX and sy <= resY then
                     if sx and sy then
-                        local p_sz = S.ping_size
-                        draw_ping_icon(sx, sy, p_sz, color)
+                        local dist = getDistanceBetweenCoords3d(px, py, pz, ping.x, ping.y, ping.z)
 
-                        local first_line = STR_GOAL
-                        if S.show_distance then
-                            local dist = getDistanceBetweenCoords3d(px, py, pz, ping.x, ping.y, ping.z)
-                            first_line = first_line .. string.format(" [%.1f%s]", dist, STR_M)
-                        end
-                        if S.show_lifetime and not ping.pinned then
-                            first_line = first_line .. string.format(" (%s %.1f)", STR_LEFT, math.max(left, 0))
-                        end
+                        local a = alpha
 
-                        local text = first_line
-                        if S.show_author then
-                            text = text .. "\n" .. STR_FROM .. " " .. ping.author .. (ping.pinned and " [PIN]" or "")
+                        local extent
+                        if S.icon_type == 4 then
+                            extent = draw_ring_marker(sx, sy, ping, r, g, b, a, now, dist, left)
+                        else
+                            draw_ping_icon(sx, sy, S.ping_size, pack_color(r, g, b, a))
+                            extent = S.ping_size / 2 + 2
                         end
 
-                        local font_color = pack_color(S.font_r, S.font_g, S.font_b, alpha)
-                        renderFontDrawText(ping_font, text, sx + p_sz + 4, sy - 12, font_color)
+                        draw_ping_label(sx + extent + 6, sy, ping, dist, r, g, b, a)
                     end
                 elseif S.offscreen_arrows then
-                    draw_offscreen_arrow(ping, color)
+                    draw_offscreen_arrow(ping, r, g, b, alpha)
                 end
             end
         end
@@ -958,6 +1233,10 @@ function sampev.onServerMessage(color, text)
 
     if clean_text:find(STR_NOGROUP) then
         local my_name = get_my_name()
+        if tracking then
+            tracking = false
+            sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Слежение выключено: вы не состоите в группе."), -1)
+        end
         for i = #active_pings, 1, -1 do
             if active_pings[i].author == my_name and (os.clock() - active_pings[i].time) < 3.0 then
                 remove_ping(i)
@@ -1009,5 +1288,6 @@ function onScriptTerminate(script, quitGame)
         end
         if save_at then inicfg.save(cfg, iniFileName) end
         if ping_font then renderReleaseFont(ping_font) end
+        if ping_font_small then renderReleaseFont(ping_font_small) end
     end
 end
