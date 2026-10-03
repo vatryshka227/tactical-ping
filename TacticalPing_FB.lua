@@ -9,17 +9,18 @@ local inicfg = require 'inicfg'
 local bit = require 'bit'
 local encoding = require 'encoding'
 
--- Файл должен быть сохранён в UTF-8 (без BOM). Для чата строки перекодируются в CP1251.
+-- файл в UTF-8, в чат уходит CP1251 через cp()
 encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 local function cp(s) return u8:decode(s) end
 
-local SCRIPT_VERSION = "1.5.3"
+local function msg(text)
+    sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}" .. text), -1)
+end
 
--- ============ НАСТРОЙКИ ============
+local SCRIPT_VERSION = "1.5.4"
+
 local iniFileName = 'TacticalPing.ini'
--- inicfg не умеет хранить таблицы, поэтому цвета лежат в отдельных ключах.
--- Недостающие ключи inicfg.load подставляет из значений по умолчанию сам.
 local cfg_defaults = {
     settings = {
         cooldown = 5.0,
@@ -50,7 +51,6 @@ local cfg_defaults = {
         auto_update = true,
         track_interval = 5.0,
         track_move_threshold = 12.0,
-        track_min_interval = 2.0,
         track_mode = 2,
         icon_v2 = false,
         look_version = 0
@@ -58,8 +58,7 @@ local cfg_defaults = {
 }
 local cfg = inicfg.load(cfg_defaults, iniFileName)
 
--- Защита от битого или старого ini: недостающие значения и значения не того типа
--- заменяются на значения по умолчанию, чтобы скрипт не падал при загрузке.
+-- чиним битый ini
 if type(cfg) ~= "table" then cfg = {} end
 if type(cfg.settings) ~= "table" then cfg.settings = {} end
 for k, v in pairs(cfg_defaults.settings) do
@@ -67,12 +66,9 @@ for k, v in pairs(cfg_defaults.settings) do
 end
 inicfg.save(cfg, iniFileName)
 
--- Строки, декодированные один раз при загрузке
 local STR_GOAL = cp("ЦЕЛЬ")
-local STR_FROM = cp("От:")
 local STR_M = cp("м")
 local STR_KM = cp("км")
-local STR_LEFT = cp("ост.")
 local STR_NOGROUP = cp("%[Ошибка%] Вы не состоите в группе!")
 
 -- Формат: Ник[ID]: (( X Y Z
@@ -97,17 +93,15 @@ local icon_list = {
     {name = "Кольцо (рекомендуется)", id = 4}
 }
 
--- ============ ПЕРЕМЕННЫЕ imgui ============
 local S = cfg.settings
 if S.track_interval < 2.0 then S.track_interval = 2.0 end
--- Один раз переключаем иконку на новое «Кольцо» (старые иконки остаются в меню)
+-- иконка по умолчанию - кольцо (один раз)
 if not S.icon_v2 then
     S.icon_type = 4
     S.icon_v2 = true
     inicfg.save(cfg, iniFileName)
 end
--- Один раз заменяем старый ядовито-зелёный цвет метки по умолчанию на более мягкий.
--- Если цвет был изменён вручную, он остаётся как есть.
+-- мятный цвет вместо старого зелёного (один раз)
 if S.look_version < 2 then
     if math.abs(S.ping_r - 0.2) < 0.01 and math.abs(S.ping_g - 1.0) < 0.01 and math.abs(S.ping_b - 0.2) < 0.01 then
         S.ping_r, S.ping_g, S.ping_b = 0.30, 0.90, 0.60
@@ -140,7 +134,6 @@ local c_auto_update = imgui.new.bool(S.auto_update)
 local c_track_interval = imgui.new.float(S.track_interval)
 local c_track_move_threshold = imgui.new.float(S.track_move_threshold)
 
--- ============ СОСТОЯНИЕ ============
 local active_pings = {}
 local last_ping_time = 0
 local ping_font = nil
@@ -156,7 +149,6 @@ local last_track_x, last_track_y, last_track_z = nil, nil, nil
 local last_incoming = {}
 local author_cache = {}
 
--- ============ АВТООБНОВЛЕНИЕ ============
 local dlstatus = require('moonloader').download_status
 local UPDATE_URL_VERSION = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/refs/heads/main/versions.txt"
 local UPDATE_URL_SCRIPT  = "https://raw.githubusercontent.com/vatryshka227/tactical-ping/main/TacticalPing_FB.lua"
@@ -190,8 +182,7 @@ local function read_file(path)
     return content
 end
 
--- Ждёт именно окончания загрузки (callback), а не просто появления файла.
--- Вызывать только из lua_thread (внутри используется wait).
+-- ждём конец загрузки, вызывать из lua_thread
 local function download_file(url, path, timeout_ms)
     if doesFileExist(path) then os.remove(path) end
     local finished = false
@@ -217,11 +208,10 @@ local function check_and_update(silent)
             update_state.status = status
             if doesFileExist(UPDATE_TMP) then os.remove(UPDATE_TMP) end
             if chat_text and not silent then
-                sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}" .. chat_text), -1)
+                msg(chat_text)
             end
         end
 
-        -- 1. Версия на сервере
         local ok = download_file(UPDATE_URL_VERSION, UPDATE_TMP_VER, 8000)
         local remote_ver = ok and read_file(UPDATE_TMP_VER) or nil
         if doesFileExist(UPDATE_TMP_VER) then os.remove(UPDATE_TMP_VER) end
@@ -239,20 +229,19 @@ local function check_and_update(silent)
             update_state.busy = false
             update_state.status = "Актуальная версия (" .. SCRIPT_VERSION .. ")"
             if not silent then
-                sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}У вас последняя версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
+                msg(string.format("Версия актуальная: {FFFF00}%s", SCRIPT_VERSION))
             end
             return
         end
 
-        -- 2. Скачивание новой версии
         update_state.status = "Скачивание " .. remote_ver .. "..."
-        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Найдена новая версия {FFFF00}%s{FFFFFF}. Скачиваю...", remote_ver)), -1)
+        msg(string.format("Найдена версия {FFFF00}%s{FFFFFF}, скачиваю...", remote_ver))
 
         if not download_file(UPDATE_URL_SCRIPT, UPDATE_TMP, 20000) then
             return fail("Ошибка скачивания скрипта", "Не удалось скачать обновление.")
         end
 
-        -- 3. Проверка содержимого: это должен быть целый Lua-скрипт
+        -- проверяем, что скачан целый рабочий скрипт
         local content = read_file(UPDATE_TMP)
         os.remove(UPDATE_TMP)
         if not content or #content < 2000
@@ -261,13 +250,11 @@ local function check_and_update(silent)
             return fail("Ошибка: файл повреждён", "Скачанный файл повреждён или пуст.")
         end
 
-        -- Файл должен компилироваться (loadstring только проверяет синтаксис, код не запускает)
         local compiled = loadstring(content)
         if not compiled then
             return fail("Ошибка: в скачанном файле синтаксическая ошибка", "Скачанный файл не компилируется, обновление отменено.")
         end
 
-        -- 4. Бэкап текущей версии и замена
         local this_file = thisScript().path
         local current = read_file(this_file)
         if current then
@@ -284,19 +271,18 @@ local function check_and_update(silent)
 
         update_state.busy = false
         update_state.status = "Обновлено до " .. remote_ver .. ". Перезагрузка..."
-        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Обновлено до {FFFF00}%s{FFFFFF}. Скрипт перезагрузится. Старая версия сохранена в .bak", remote_ver)), -1)
+        msg(string.format("Обновлено до {FFFF00}%s{FFFFFF}, перезагрузка. Старая версия в .bak", remote_ver))
         wait(1500)
         thisScript():reload()
     end)
 end
 
--- ============ ВСПОМОГАТЕЛЬНОЕ ============
 local function save_cfg()
     save_at = nil
     inicfg.save(cfg, iniFileName)
 end
 
--- Сохранение с задержкой, чтобы не писать на диск каждый кадр при движении слайдера
+-- сохраняем через секунду после последнего изменения
 local function schedule_save()
     save_at = os.clock() + 1.0
 end
@@ -345,7 +331,6 @@ local function hsv2rgb(h, s, v)
     else return v, p, q end
 end
 
--- Стабильный цвет для каждого ника
 local function author_rgb(name)
     local c = author_cache[name]
     if not c then
@@ -380,12 +365,12 @@ end
 
 local function start_learning()
     learning_color = true
-    sampAddChatMessage(cp("{FFAA00}[Tactical Ping] {FFFFFF}Ждём групповую метку. Поставьте метку через /fb или попросите союзника - цвет сообщения запомнится."), -1)
+    msg("Ждём групповую метку, цвет сообщения запомнится.")
 end
 
 local function set_tracking(on)
     tracking = on
-    last_track = 0 -- первая метка уходит сразу
+    last_track = 0
     last_track_x, last_track_y, last_track_z = nil, nil, nil
     if on then
         local how
@@ -396,22 +381,19 @@ local function set_tracking(on)
         else
             how = string.format("каждые {FFFF00}%.1f{FFFFFF} сек. или при перемещении на {FFFF00}%.1f м{FFFFFF}", S.track_interval, S.track_move_threshold)
         end
-        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Слежение включено: " .. how .. ". Выключить: {FFFF00}/ptrack"), -1)
+        msg("Слежение включено: " .. how .. ". Выключить: {FFFF00}/ptrack")
     else
-        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Слежение выключено."), -1)
+        msg("Слежение выключено.")
     end
 end
 
--- ============ ОТРИСОВКА ============
 local function clamp(v, lo, hi)
     if v < lo then return lo elseif v > hi then return hi end
     return v
 end
 
--- Проекция точки на экран без ограничения дальностью прорисовки игры.
--- isPointOnScreen считает точки за дальней плоскостью камеры невидимыми, поэтому далёкие метки
--- пропадали. Любая точка на луче из камеры проецируется в один и тот же пиксель, поэтому
--- дальнюю точку подтягиваем ближе по лучу. Третье значение: точка впереди камеры.
+-- isPointOnScreen режет всё за дальностью прорисовки, поэтому дальнюю точку
+-- подтягиваем по лучу из камеры, пиксель на экране тот же. Третье значение - точка перед камерой
 local FAR_PROJECT = 200.0
 local function project_point(x, y, z)
     local camx, camy, camz = getActiveCameraCoordinates()
@@ -427,7 +409,6 @@ local function project_point(x, y, z)
     return sx, sy, dot > 0
 end
 
--- Старые простые иконки (квадрат, треугольник, ромб, крест)
 local function draw_ping_icon(sx, sy, size, color)
     local half = size / 2
     local icon = S.icon_type
@@ -435,7 +416,6 @@ local function draw_ping_icon(sx, sy, size, color)
     if icon == 0 then
         renderDrawBox(sx - half, sy - half, size, size, color)
     elseif icon == 1 then
-        -- треугольник вершиной вниз
         for i = 0, size - 1 do
             local w = size - i
             renderDrawBox(sx - w / 2, sy - half + i, w, 1, color)
@@ -453,7 +433,7 @@ local function draw_ping_icon(sx, sy, size, color)
     end
 end
 
--- Дуга (fraction = 1 даёт целое кольцо). Начинается сверху, идёт по часовой стрелке.
+-- дуга от верха по часовой, fraction 1 - целый круг
 local function draw_arc(cx, cy, radius, fraction, segments, width, color)
     if fraction <= 0 then return end
     if fraction > 1 then fraction = 1 end
@@ -469,7 +449,6 @@ local function draw_arc(cx, cy, radius, fraction, segments, width, color)
     end
 end
 
--- Круглая точка (горизонтальными полосками)
 local function draw_disc(cx, cy, radius, color)
     local r = math.max(1, math.floor(radius))
     for dy = -r, r do
@@ -478,7 +457,6 @@ local function draw_disc(cx, cy, radius, color)
     end
 end
 
--- Указатель-треугольник вершиной вниз; tip_y - нижняя точка
 local function draw_down_pointer(cx, tip_y, width, height, color)
     for i = 0, height - 1 do
         local w = width * (1 - i / height)
@@ -486,12 +464,10 @@ local function draw_down_pointer(cx, tip_y, width, height, color)
     end
 end
 
--- Метка-кольцо: одно тонкое кольцо (оно же индикатор времени жизни), точка в центре,
--- небольшой указатель сверху. Возвращает внешний радиус для расположения текста.
+-- кольцо с точкой и указателем, возвращает радиус для текста
 local function draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
     local born_age = now - ping.born
 
-    -- появление: метка «садится» с увеличенного размера и проявляется
     local spawn_scale, spawn_alpha = 1.0, 1.0
     if born_age < 0.35 then
         local u = born_age / 0.35
@@ -500,28 +476,25 @@ local function draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
         spawn_alpha = e
     end
 
-    -- дальние метки меньше, близкие больше (с ограничением)
     local dist_scale = clamp(1.25 - dist / 400, 0.65, 1.25)
     local R0 = S.ping_size * 1.2 * dist_scale
     local pulse = 1 + 0.04 * math.sin(now * 4)
     local R = R0 * spawn_scale * pulse
     local a = alpha * spawn_alpha
-    local seg = clamp(math.floor(R * 2.6), 24, 64) -- больше сегментов - круг без «углов»
+    local seg = clamp(math.floor(R * 2.6), 24, 64)
 
     local col = pack_color(r, g, b, a)
     local dark = pack_color(0, 0, 0, a * 0.45)
 
-    -- тонкая волна при появлении
     if born_age < 0.6 then
         local u = born_age / 0.6
         draw_arc(sx, sy, R0 * (1 + 1.5 * u), 1, seg, 1, pack_color(r, g, b, alpha * (1 - u) * 0.45))
     end
 
-    -- тонкий тёмный контур по краям кольца: читается на любом фоне, но без толстой чёрной полосы
     draw_arc(sx, sy, R + 1.6, 1, seg, 1, dark)
     draw_arc(sx, sy, R - 1.6, 1, seg, 1, dark)
 
-    -- само кольцо: бледная подложка + яркая дуга оставшегося времени (закреплённая метка - целое кольцо)
+    -- кольцо заодно показывает оставшееся время
     if S.show_lifetime and not ping.pinned then
         draw_arc(sx, sy, R, 1, seg, 2, pack_color(r, g, b, a * 0.28))
         draw_arc(sx, sy, R, clamp(left / S.ping_lifetime, 0, 1), seg, 2, col)
@@ -529,12 +502,10 @@ local function draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
         draw_arc(sx, sy, R, 1, seg, 2, col)
     end
 
-    -- точка в центре
     local dot = math.max(2, R0 * 0.16)
     draw_disc(sx, sy, dot + 1, dark)
     draw_disc(sx, sy, dot, col)
 
-    -- небольшой указатель над кольцом
     local ph = math.max(4, R0 * 0.5)
     local pw = R0 * 0.75
     draw_down_pointer(sx, sy - R - 4, pw, ph, col)
@@ -542,7 +513,6 @@ local function draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
     return R0 + 3
 end
 
--- Подпись: лёгкая плашка с тонкой цветной полоской, дистанция крупно белым, ник мельче и спокойнее
 local function draw_ping_label(x, y, ping, dist, r, g, b, alpha)
     local big, small = ping_font, ping_font_small
     if not big or not small then return end
@@ -572,7 +542,6 @@ local function draw_ping_label(x, y, ping, dist, r, g, b, alpha)
     local h = h1 + h2 + pad * 2 - 2
     local top = y - h / 2
 
-    -- плашка со скруглёнными углами (два перекрывающихся прямоугольника)
     local bg = pack_color(0, 0, 0, alpha * 0.38)
     renderDrawBox(x + 1, top, w - 2, h, bg)
     renderDrawBox(x, top + 1, w, h - 2, bg)
@@ -599,7 +568,6 @@ local function draw_ping_label(x, y, ping, dist, r, g, b, alpha)
     end
 end
 
--- Треугольник-стрелка заданного размера: заливка линиями или только контур
 local function draw_arrow_tri(ax, ay, dx, dy, sz, color, steps, width, outline_only)
     local tip_len = sz * 0.7
     local base_half = sz * 0.6
@@ -624,8 +592,7 @@ local function draw_arrow_tri(ax, ay, dx, dy, sz, color, steps, width, outline_o
     renderDrawLine(b1x, b1y, b2x, b2y, width, color)
 end
 
--- Стрелка у края экрана: мягкое свечение, тёмный контур, цвет автора, лёгкая пульсация
--- (направление считается от центра, метки за спиной учитываются)
+-- стрелка у края экрана
 local function draw_offscreen_arrow(ping, r, g, b, alpha)
     local resX, resY = getScreenResolution()
     local cx, cy = resX / 2, resY / 2
@@ -635,16 +602,15 @@ local function draw_offscreen_arrow(ping, r, g, b, alpha)
 
     local dx, dy = sx - cx, sy - cy
 
-    -- Для точек позади камеры экранные координаты зеркальны - разворачиваем направление
+    -- сзади проекция зеркальная
     if not in_front then dx, dy = -dx, -dy end
 
     local len = math.sqrt(dx * dx + dy * dy)
     if len < 0.001 then
-        dx, dy, len = 0, 1, 1 -- метка точно за спиной: стрелка вниз
+        dx, dy, len = 0, 1, 1
     end
     dx, dy = dx / len, dy / len
 
-    -- Точка пересечения луча из центра с прямоугольником с отступом
     local margin = S.offscreen_margin
     local hw, hh = cx - margin, cy - margin
     local tx = math.abs(dx) > 1e-4 and hw / math.abs(dx) or math.huge
@@ -654,17 +620,16 @@ local function draw_offscreen_arrow(ping, r, g, b, alpha)
 
     local size = S.offscreen_size * (1 + 0.08 * math.sin(os.clock() * 5))
 
-    draw_arrow_tri(ax, ay, dx, dy, size * 1.5, pack_color(r, g, b, alpha * 0.22), 8, 4, false)  -- свечение
-    draw_arrow_tri(ax, ay, dx, dy, size * 1.12, pack_color(0, 0, 0, alpha * 0.7), 0, 4, true)   -- тёмный контур
-    draw_arrow_tri(ax, ay, dx, dy, size, pack_color(r, g, b, alpha), 8, 3, false)               -- заливка
+    draw_arrow_tri(ax, ay, dx, dy, size * 1.5, pack_color(r, g, b, alpha * 0.22), 8, 4, false)
+    draw_arrow_tri(ax, ay, dx, dy, size * 1.12, pack_color(0, 0, 0, alpha * 0.7), 0, 4, true)
+    draw_arrow_tri(ax, ay, dx, dy, size, pack_color(r, g, b, alpha), 8, 3, false)
 end
 
--- ============ МЕНЮ ============
 imgui.OnInitialize(function()
     local io = imgui.GetIO()
     io.IniFilename = nil
 
-    -- Кириллический шрифт, иначе русский текст в меню показывается как "????"
+    -- шрифт с кириллицей
     local font_path = getFolderPath(0x14) .. '\\arial.ttf'
     if doesFileExist(font_path) then
         io.Fonts:AddFontFromFileTTF(font_path, 16, nil, io.Fonts:GetGlyphRangesCyrillic())
@@ -754,7 +719,7 @@ imgui.OnFrame(function() return menu_state[0] end, function()
         end
         imgui.PopItemWidth()
 
-        imgui.Text("Текущий статус:")
+        imgui.Text("Статус:")
         if tracking then
             imgui.SameLine()
             imgui.TextColored(imgui.ImVec4(0.2, 1.0, 0.5, 1.0), "ВКЛ")
@@ -768,15 +733,6 @@ imgui.OnFrame(function() return menu_state[0] end, function()
                 set_tracking(true)
             end
         end
-
-        if S.track_mode == 0 then
-            imgui.TextWrapped("Метка отправляется каждые N секунд, стоите вы или двигаетесь.")
-        elseif S.track_mode == 1 then
-            imgui.TextWrapped("Метка отправляется, когда вы отошли от последней отправленной точки на N метров. На месте метка не обновляется.")
-        else
-            imgui.TextWrapped("Метка отправляется по таймеру, а при перемещении дальше заданного расстояния - сразу.")
-        end
-        imgui.TextWrapped("Чаще раза в 2 секунды метки не отправляются (защита от флуда).")
     end
 
     if imgui.CollapsingHeader("Текст метки") then
@@ -916,7 +872,6 @@ imgui.OnFrame(function() return menu_state[0] end, function()
     imgui.End()
 end)
 
--- ============ МЕТКИ ============
 local function destroy_ping(ping)
     if ping.blip then
         removeBlip(ping.blip)
@@ -937,7 +892,7 @@ local function notify_ping(author, x, y, z)
     if S.notifications then
         local px, py, pz = getCharCoordinates(PLAYER_PED)
         local dist = getDistanceBetweenCoords3d(px, py, pz, x, y, z)
-        sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}%s поставил метку. Расстояние: {FFFF00}%.0f м", tostring(author), dist)), -1)
+        msg(string.format("%s поставил метку, {FFFF00}%.0f м", tostring(author), dist))
     end
     if S.notification_sound then
         addOneOffSound(0.0, 0.0, 0.0, 1056)
@@ -996,35 +951,34 @@ local function clear_all_pings()
     for i = #active_pings, 1, -1 do
         remove_ping(i)
     end
-    sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Все метки и чекпоинты очищены."), -1)
+    msg("Метки очищены.")
 end
 
 local function toggle_last_ping_pin()
     local ping = active_pings[#active_pings]
     if not ping then
-        sampAddChatMessage(cp("{FFAA00}[Tactical Ping] {FFFFFF}Нет активных меток."), -1)
+        msg("Нет активных меток.")
         return
     end
     ping.pinned = not ping.pinned
     if ping.pinned then
-        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Последняя метка закреплена и не исчезнет по таймеру."), -1)
+        msg("Метка закреплена.")
     else
         ping.time = os.clock()
-        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Закрепление снято."), -1)
+        msg("Метка откреплена.")
     end
 end
 
--- ============ ОТПРАВКА МЕТКИ ============
 local function send_ping_at(tx, ty, tz, silent)
-    -- Округляем, а не отбрасываем дробную часть, чтобы метка у союзников не уезжала вниз
+    -- округляем, чтобы метка у союзников не уезжала вниз
     local send_x = math.floor(tx + 0.5)
     local send_y = math.floor(ty + 0.5)
     local send_z = math.floor(tz + 0.5)
 
-    -- Авто-метки не рисуем у себя: иначе под вами каждые пару секунд создаются чекпоинт и блип
+    -- авто-метки у себя не рисуем
     if not silent then
         add_ping(tx, ty, tz, get_my_name(), true)
-        sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Метка отправлена через {FFFF00}/fb {FFFFFF}[Точка: %d, %d, %d]", send_x, send_y, send_z)), -1)
+        msg(string.format("Метка отправлена: %d %d %d", send_x, send_y, send_z))
     end
     sampSendChat(string.format("/fb %d %d %d", send_x, send_y, send_z))
 end
@@ -1034,7 +988,7 @@ local function cooldown_ok()
     if time_passed >= S.cooldown then
         return true
     end
-    sampAddChatMessage(cp(string.format("{FF0000}[Tactical Ping] {FFFFFF}Подождите %.1f сек. перед следующей меткой!", S.cooldown - time_passed)), -1)
+    msg(string.format("Подождите %.1f сек.", S.cooldown - time_passed))
     return false
 end
 
@@ -1042,7 +996,7 @@ local function place_ping_marker()
     if not cooldown_ok() then return end
 
     local start_x, start_y
-    -- 0xB6F1A8 - режим камеры; 53 - режим прицеливания, прицел смещён от центра экрана
+    -- 0xB6F1A8 - режим камеры, 53 - прицеливание
     if memory.getuint8(0xB6F1A8) == 53 then
         start_x, start_y = convertGameScreenCoordsToWindowScreenCoords(339.5, 179.2)
     else
@@ -1073,13 +1027,11 @@ local function place_self_ping()
     last_ping_time = os.clock()
 end
 
--- ============ АВТО-СЛЕЖЕНИЕ ============
-local TRACK_MIN_INTERVAL = 2.0 -- не чаще, чем раз в 2 сек: быстрее у получателей всё равно отсекается антиспамом
+local TRACK_MIN_INTERVAL = 2.0 -- получатели всё равно режут чаще 2 сек
 
 local function tracking_ping(px, py, pz)
     local now = os.clock()
-    local min_interval = math.max(TRACK_MIN_INTERVAL, tonumber(S.track_min_interval) or TRACK_MIN_INTERVAL)
-    if now - last_track < min_interval then return false end
+    if now - last_track < TRACK_MIN_INTERVAL then return false end
 
     send_ping_at(px, py, pz, true)
     last_track = now
@@ -1091,7 +1043,7 @@ local function tracking_update(px, py, pz)
     if not tracking then return end
     if not sampIsLocalPlayerSpawned() or isCharDead(PLAYER_PED) then return end
 
-    local mode = tonumber(S.track_mode) or 2 -- 0 - секунды, 1 - метры, 2 - оба
+    local mode = tonumber(S.track_mode) or 2 -- 0 сек, 1 м, 2 оба
     local fire = false
 
     if last_track_x == nil then
@@ -1118,16 +1070,13 @@ local function tracking_update(px, py, pz)
     if fire then tracking_ping(px, py, pz) end
 end
 
--- ============ ГЛАВНЫЙ ЦИКЛ ============
 function main()
     if not isSampLoaded() or not isSampfuncsLoaded() then return end
     while not isSampAvailable() do wait(100) end
 
     rebuild_font()
-    math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 
-    sampAddChatMessage(cp(string.format("{00FF00}[Tactical Ping] {FFFFFF}Скрипт загружен! Версия: {FFFF00}%s", SCRIPT_VERSION)), -1)
-    sampAddChatMessage(cp("{00FF00}[Tactical Ping] {FFFFFF}Меню: {FFFF00}/pmenu {FFFFFF}| Закрепить: {FFFF00}/ppin {FFFFFF}| Очистить: {FFFF00}/pclear {FFFFFF}| На себя: {FFFF00}/pself {FFFFFF}| Авто-метка: {FFFF00}/ptrack {FFFFFF}| Фильтр цвета: {FFFF00}/pcolor"), -1)
+    msg(string.format("v%s | {FFFF00}/pmenu /ppin /pclear /pself /ptrack /pcolor", SCRIPT_VERSION))
 
     sampRegisterChatCommand('ping', place_ping_marker)
     sampRegisterChatCommand('pself', place_self_ping)
@@ -1140,7 +1089,7 @@ function main()
             S.fb_color = 0
             learning_color = false
             schedule_save()
-            sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Фильтр цвета чата выключен."), -1)
+            msg("Фильтр цвета выключен.")
         else
             start_learning()
         end
@@ -1157,7 +1106,6 @@ function main()
         if font_rebuild_at and os.clock() >= font_rebuild_at then rebuild_font() end
         if save_at and os.clock() >= save_at then save_cfg() end
 
-        -- Назначение клавиши
         if binding_key then
             if os.clock() > bind_ready then
                 if wasKeyPressed(vkeys.VK_ESCAPE) then
@@ -1168,7 +1116,7 @@ function main()
                             S.ping_key = k
                             binding_key = false
                             schedule_save()
-                            sampAddChatMessage(cp(string.format("{00FF88}[Tactical Ping] {FFFFFF}Клавиша метки: {FFFF00}%s", key_name(k))), -1)
+                            msg(string.format("Клавиша метки: {FFFF00}%s", key_name(k)))
                             break
                         end
                     end
@@ -1178,11 +1126,9 @@ function main()
             place_ping_marker()
         end
 
-        -- Отрисовка и удаление меток
         local now = os.clock()
         local px, py, pz = getCharCoordinates(PLAYER_PED)
 
-        -- Авто-метка: отправляем по интервалу или сразу после перемещения дальше порога.
         tracking_update(px, py, pz)
 
         local resX, resY = getScreenResolution()
@@ -1204,21 +1150,17 @@ function main()
 
                 local sx, sy, in_front = project_point(ping.x, ping.y, ping.z)
                 if in_front and sx and sy and sx >= 0 and sy >= 0 and sx <= resX and sy <= resY then
-                    if sx and sy then
-                        local dist = getDistanceBetweenCoords3d(px, py, pz, ping.x, ping.y, ping.z)
+                    local dist = getDistanceBetweenCoords3d(px, py, pz, ping.x, ping.y, ping.z)
 
-                        local a = alpha
-
-                        local extent
-                        if S.icon_type == 4 then
-                            extent = draw_ring_marker(sx, sy, ping, r, g, b, a, now, dist, left)
-                        else
-                            draw_ping_icon(sx, sy, S.ping_size, pack_color(r, g, b, a))
-                            extent = S.ping_size / 2 + 2
-                        end
-
-                        draw_ping_label(sx + extent + 6, sy, ping, dist, r, g, b, a)
+                    local extent
+                    if S.icon_type == 4 then
+                        extent = draw_ring_marker(sx, sy, ping, r, g, b, alpha, now, dist, left)
+                    else
+                        draw_ping_icon(sx, sy, S.ping_size, pack_color(r, g, b, alpha))
+                        extent = S.ping_size / 2 + 2
                     end
+
+                    draw_ping_label(sx + extent + 6, sy, ping, dist, r, g, b, alpha)
                 elseif S.offscreen_arrows then
                     draw_offscreen_arrow(ping, r, g, b, alpha)
                 end
@@ -1227,7 +1169,6 @@ function main()
     end
 end
 
--- ============ ЧАТ ============
 function sampev.onServerMessage(color, text)
     local clean_text = (text:gsub("{%x%x%x%x%x%x}", ""))
 
@@ -1235,12 +1176,12 @@ function sampev.onServerMessage(color, text)
         local my_name = get_my_name()
         if tracking then
             tracking = false
-            sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Слежение выключено: вы не состоите в группе."), -1)
+            msg("Слежение выключено: вы не в группе.")
         end
         for i = #active_pings, 1, -1 do
             if active_pings[i].author == my_name and (os.clock() - active_pings[i].time) < 3.0 then
                 remove_ping(i)
-                sampAddChatMessage(cp("{FF0000}[Tactical Ping] {FFFFFF}Отмена: Вы не состоите в группе!"), -1)
+                msg("Вы не состоите в группе, метка отменена.")
                 break
             end
         end
@@ -1250,20 +1191,20 @@ function sampev.onServerMessage(color, text)
     local author, x_str, y_str, z_str = clean_text:match(PING_PATTERN)
     if not (author and x_str and y_str and z_str) then return end
 
-    -- Калибровка: запоминаем цвет настоящего группового сообщения
+    -- калибровка цвета
     if learning_color then
         learning_color = false
         S.fb_color = color
         schedule_save()
-        sampAddChatMessage(cp("{00FF88}[Tactical Ping] {FFFFFF}Цвет группового чата запомнен, остальные сообщения вида (( X Y Z будут игнорироваться."), -1)
+        msg("Цвет чата запомнен, метки из других чатов игнорируются.")
     end
 
-    -- Фильтр по цвету: сообщения из /b и других чатов не должны ставить метки
+    -- только сообщения нужного цвета
     if S.fb_color ~= 0 and color ~= S.fb_color then return end
 
     if author == get_my_name() then return end
 
-    -- Защита от спама метками
+    -- антиспам
     local now = os.clock()
     local last = last_incoming[author]
     if last and now - last < S.incoming_cooldown then return end
@@ -1272,7 +1213,7 @@ function sampev.onServerMessage(color, text)
     local tx, ty, tz = tonumber(x_str), tonumber(y_str), tonumber(z_str)
     if not (tx and ty and tz) then return end
 
-    -- Используем присланную высоту; землю берём только если высота не передана
+    -- землю берём, только если z не пришёл
     if tz == 0 then
         local ground = getGroundZFor3dCoord(tx, ty, 300.0)
         if type(ground) == "number" and ground ~= 0 then tz = ground end
