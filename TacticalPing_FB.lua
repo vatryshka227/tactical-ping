@@ -78,7 +78,7 @@ local function msg(text)
     sampAddChatMessage(cp("{55D4C0}[Tactical Ping] {E8F0F2}" .. text), -1)
 end
 
-local SCRIPT_VERSION = "1.5.10"
+local SCRIPT_VERSION = "1.5.11"
 
 local iniFileName = 'TacticalPing.ini'
 local cfg_defaults = {
@@ -673,37 +673,7 @@ local function draw_ping_label(x, y, ping, dist, r, g, b, alpha)
     end
 end
 
-local function draw_arrow_tri(ax, ay, dx, dy, sz, color, steps, width, outline_only)
-    width = max(1, floor(width + 0.5))
-    steps = max(1, floor(steps or 1))
-    local tip_len = sz * 0.7
-    local base_half = sz * 0.6
-    local perp_x, perp_y = -dy, dx
-
-    local tip_x = ax + dx * tip_len
-    local tip_y = ay + dy * tip_len
-    local bx = ax - dx * tip_len * 0.5
-    local by = ay - dy * tip_len * 0.5
-    local b1x = bx + perp_x * base_half
-    local b1y = by + perp_y * base_half
-    local b2x = bx - perp_x * base_half
-    local b2y = by - perp_y * base_half
-
-    if outline_only then
-        renderDrawLine(tip_x, tip_y, b1x, b1y, width, color)
-        renderDrawLine(tip_x, tip_y, b2x, b2y, width, color)
-        renderDrawLine(b1x, b1y, b2x, b2y, width, color)
-        return
-    end
-
-    local inv = 1 / steps
-    for k = 0, steps do
-        local f = k * inv
-        renderDrawLine(tip_x, tip_y, b1x + (b2x - b1x) * f, b1y + (b2y - b1y) * f, width, color)
-    end
-    renderDrawLine(b1x, b1y, b2x, b2y, width, color)
-end
-
+-- лёгкая стрелка: 3 линии контура + 1 fill, без pulse и без 3 слоёв
 local function draw_offscreen_arrow(ping, r, g, b, alpha)
     local cx, cy = frame_resX * 0.5, frame_resY * 0.5
 
@@ -715,7 +685,8 @@ local function draw_offscreen_arrow(ping, r, g, b, alpha)
 
     local len = sqrt(dx * dx + dy * dy)
     if len < 0.001 then
-        dx, dy, len = 0, 1, 1
+        dx, dy = 0, 1
+        len = 1
     end
     local inv = 1 / len
     dx, dy = dx * inv, dy * inv
@@ -727,11 +698,32 @@ local function draw_offscreen_arrow(ping, r, g, b, alpha)
     local t = min(tx, ty)
     local ax, ay = cx + dx * t, cy + dy * t
 
-    local size = S.offscreen_size * (1 + 0.04 * sin(frame_now * 3.2))
+    local sz = S.offscreen_size
+    local tip_len = sz * 0.7
+    local base_half = sz * 0.55
+    local perp_x, perp_y = -dy, dx
 
-    draw_arrow_tri(ax, ay, dx, dy, size * 1.45, pack_color(r, g, b, alpha * 0.16), 8, 4, false)
-    draw_arrow_tri(ax, ay, dx, dy, size * 1.10, pack_color(0.02, 0.03, 0.04, alpha * 0.65), 0, 3, true)
-    draw_arrow_tri(ax, ay, dx, dy, size, pack_color(r, g, b, alpha * 0.95), 8, 3, false)
+    local tip_x = ax + dx * tip_len
+    local tip_y = ay + dy * tip_len
+    local bx = ax - dx * tip_len * 0.45
+    local by = ay - dy * tip_len * 0.45
+    local b1x = bx + perp_x * base_half
+    local b1y = by + perp_y * base_half
+    local b2x = bx - perp_x * base_half
+    local b2y = by - perp_y * base_half
+
+    -- тонкий fill (2 линии вместо 9)
+    local mid_x = (b1x + b2x) * 0.5
+    local mid_y = (b1y + b2y) * 0.5
+    local col = pack_color(r, g, b, alpha * 0.9)
+    local dark = pack_color(0.02, 0.03, 0.04, alpha * 0.55)
+    renderDrawLine(tip_x, tip_y, mid_x, mid_y, 3, col)
+    renderDrawLine(tip_x, tip_y, b1x, b1y, 2, col)
+    renderDrawLine(tip_x, tip_y, b2x, b2y, 2, col)
+    -- контур
+    renderDrawLine(tip_x, tip_y, b1x, b1y, 1, dark)
+    renderDrawLine(tip_x, tip_y, b2x, b2y, 1, dark)
+    renderDrawLine(b1x, b1y, b2x, b2y, 1, dark)
 end
 
 imgui.OnInitialize(function()
